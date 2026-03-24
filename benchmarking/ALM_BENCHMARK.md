@@ -127,7 +127,7 @@ Results from running on a single workstation:
 | Builder windows | 181 |
 | Filtered windows | 25 |
 | Total filtered duration | 3,035.50s |
-| Execution time | 21.25s |
+| Execution time | 21.23s |
 | Throughput (entries/sec) | 0.24 |
 | Throughput (windows/sec) | 8.52 |
 
@@ -140,11 +140,40 @@ Results from running on a single workstation:
 | Builder windows | 362,000 |
 | Filtered windows | 50,000 |
 | Total filtered duration | 6,071,000s |
-| Execution time | 92.53s |
-| Throughput (entries/sec) | 108.08 |
-| Throughput (windows/sec) | 3,912.36 |
+| Execution time | 93.10s |
+| Throughput (entries/sec) | 107.41 |
+| Throughput (windows/sec) | 3,888.27 |
 
 The `repeat-factor` multiplies entries in-memory after reading (via `_RepeatEntriesStage`), so the manifest file is read only once. The pipeline scales well with XennaExecutor auto-allocating workers per stage via the CompositeStage reader (FilePartitioningStage + ALMManifestReaderStage).
+
+## Stage-wise Profiling
+
+Per-stage metrics are collected via `TaskPerfUtils.aggregate_task_metrics()` and surfaced in `metrics.json` with keys like `task_<stage>_<metric>_<agg>`.
+
+**Small scale (5 entries):**
+
+| Stage | process_time mean | process_time sum | items |
+|-------|-------------------|------------------|-------|
+| file_partitioning | 0.0022s | 0.0108s | 0 |
+| alm_manifest_reader_stage | 0.0030s | 0.0152s | 5 |
+| alm_data_builder | 0.0010s | 0.0051s | 5 |
+| alm_data_overlap | 0.0002s | 0.0009s | 5 |
+
+**Large scale (10,000 entries, repeat-factor=2000):**
+
+| Stage | process_time mean | process_time sum | idle_time sum | items |
+|-------|-------------------|------------------|---------------|-------|
+| file_partitioning | 0.0028s | 27.78s | 0.00s | 0 |
+| alm_manifest_reader_stage | 0.0022s | 21.50s | 0.00s | 10,000 |
+| repeat_entries | 0.0146s | 145.54s | 0.39s | 10,000 |
+| alm_data_builder | 0.0013s | 13.36s | 179.89s | 10,000 |
+| alm_data_overlap | 0.0002s | 1.86s | 191.40s | 10,000 |
+
+**Top bottleneck:** `repeat_entries` dominates wall-clock process_time (145.54s sum) at large scale
+because it copies task data N times. In production pipelines (without `--repeat-factor`), this
+stage is absent and `alm_manifest_reader_stage` becomes the dominant stage. The `alm_data_builder`
+and `alm_data_overlap` stages are fast per-task but accumulate significant idle time waiting for
+upstream tasks to arrive.
 
 ## Output Files
 

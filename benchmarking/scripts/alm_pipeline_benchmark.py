@@ -42,6 +42,7 @@ from nemo_curator.stages.audio.alm import (
 )
 from nemo_curator.stages.base import ProcessingStage
 from nemo_curator.tasks import AudioTask
+from nemo_curator.tasks.utils import TaskPerfUtils
 
 
 class _RepeatEntriesStage(ProcessingStage[AudioTask, AudioTask]):
@@ -140,6 +141,16 @@ def run_alm_pipeline_benchmark(  # noqa: PLR0913, PLR0915
         logger.success(f"Entries: {num_output_entries} (repeat_factor={repeat_factor})")
         logger.success(f"Builder windows: {total_builder_windows}, Filtered windows: {total_filtered_windows}")
         logger.success(f"Total filtered duration: {total_filtered_dur:.2f}s")
+
+        task_metrics = TaskPerfUtils.aggregate_task_metrics(output_tasks, prefix="task")
+        stage_metrics = TaskPerfUtils.collect_stage_metrics(output_tasks)
+        logger.info("=== Stage-wise Profiling ===")
+        for stage_name, metrics in stage_metrics.items():
+            pt_mean = sum(metrics.get("process_time", [])) / max(len(metrics.get("process_time", [])), 1)
+            pt_sum = sum(metrics.get("process_time", []))
+            items = sum(metrics.get("num_items_processed", []))
+            logger.info(f"  {stage_name}: process_time mean={pt_mean:.4f}s sum={pt_sum:.4f}s items={items}")
+
         success = True
 
     except Exception as e:
@@ -154,6 +165,7 @@ def run_alm_pipeline_benchmark(  # noqa: PLR0913, PLR0915
         total_filtered_windows = 0
         total_filtered_dur = 0.0
         entries_with_windows = 0
+        task_metrics = {}
         success = False
 
     return {
@@ -181,6 +193,7 @@ def run_alm_pipeline_benchmark(  # noqa: PLR0913, PLR0915
             "total_filtered_dur_s": total_filtered_dur,
             "throughput_entries_per_sec": num_input_entries / run_time_taken if run_time_taken > 0 else 0,
             "throughput_windows_per_sec": total_builder_windows / run_time_taken if run_time_taken > 0 else 0,
+            **task_metrics,
         },
         "tasks": output_tasks or [],
     }

@@ -19,6 +19,7 @@ and logs results to configured sinks.
 """
 
 import argparse
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,7 @@ from nemo_curator.stages.audio.io.convert import AudioToDocumentStage
 from nemo_curator.stages.audio.metrics.get_wer import GetPairwiseWerStage
 from nemo_curator.stages.resources import Resources
 from nemo_curator.stages.text.io.writer import JsonlWriter
+from nemo_curator.tasks.utils import TaskPerfUtils
 
 
 def run_audio_fleurs_benchmark(  # noqa: PLR0913
@@ -108,15 +110,33 @@ def run_audio_fleurs_benchmark(  # noqa: PLR0913
         )
     )
 
+    run_start_time = time.perf_counter()
     results = pipeline.run(executor_obj)
+    run_time_taken = time.perf_counter() - run_start_time
 
-    logger.success("Benchmark completed successfully")
+    output_tasks = results or []
+    num_output_tasks = len(output_tasks)
+    task_metrics = TaskPerfUtils.aggregate_task_metrics(output_tasks, prefix="task")
+
+    stage_metrics = TaskPerfUtils.collect_stage_metrics(output_tasks)
+    logger.success(f"Benchmark completed in {run_time_taken:.2f}s")
+    logger.success(f"Output tasks: {num_output_tasks}")
+    logger.info("=== Stage-wise Profiling ===")
+    for stage_name, metrics in stage_metrics.items():
+        pt_mean = sum(metrics.get("process_time", [])) / max(len(metrics.get("process_time", [])), 1)
+        pt_sum = sum(metrics.get("process_time", []))
+        items = sum(metrics.get("num_items_processed", []))
+        logger.info(f"  {stage_name}: process_time mean={pt_mean:.4f}s sum={pt_sum:.4f}s items={items}")
 
     return {
         "metrics": {
             "is_success": True,
+            "time_taken_s": run_time_taken,
+            "num_output_tasks": num_output_tasks,
+            "throughput_tasks_per_sec": num_output_tasks / run_time_taken if run_time_taken > 0 else 0,
+            **task_metrics,
         },
-        "tasks": results,
+        "tasks": output_tasks,
     }
 
 
