@@ -244,6 +244,18 @@ def test_prepare_fleurs_stage_dataset_does_not_recopy(tmp_path: Path) -> None:
     assert (output_path / "hy_am" / "train.tsv").is_file()
 
 
+def test_prepare_fleurs_verify_dataset_uses_stage_layout(tmp_path: Path) -> None:
+    """verify_dataset derives paths from the stage's layout and passes on a staged dir."""
+    _import_stage_module()
+    prep = _import_prep_module()
+
+    lang_dir = _stage_prestaged_layout(tmp_path, lang="hy_am", split="train")
+    assert prep.verify_dataset(lang_dir, "hy_am", "train") is True
+    # Missing transcript -> verification fails.
+    (lang_dir / "train.tsv").unlink()
+    assert prep.verify_dataset(lang_dir, "hy_am", "train") is False
+
+
 def test_process_transcript_parses_tsv(tmp_path: Path) -> None:
     stage_cls, _ = _import_stage_module()
     # Arrange: create fake dev.tsv and expected wav layout

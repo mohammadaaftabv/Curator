@@ -70,10 +70,26 @@ def _count_wavs(directory: Path) -> int:
     return sum(1 for _root, _dirs, files in os.walk(directory) for f in files if f.endswith(".wav"))
 
 
-def verify_dataset(lang_dir: Path, split: str) -> bool:
+def _staging_stage(lang_dir: Path, lang: str, split: str) -> CreateInitialManifestFleursStage:
+    """Build a stage used only to query the canonical on-disk layout / staged state.
+
+    The stage owns the FLEURS on-disk contract (``<dir>/<split>.tsv`` +
+    ``<dir>/<split>/``), so deriving paths and the "is it staged?" check from it
+    keeps that contract defined in exactly one place.
+    """
+    return CreateInitialManifestFleursStage(
+        lang=lang,
+        split=split,
+        raw_data_dir=str(lang_dir),
+        auto_download=False,
+    )
+
+
+def verify_dataset(lang_dir: Path, lang: str, split: str) -> bool:
     """Verify the staged transcript + audio exist and report statistics."""
-    tsv_path = lang_dir / f"{split}.tsv"
-    audio_root = lang_dir / split
+    tsv_str, audio_str = _staging_stage(lang_dir, lang, split)._prestaged_paths(str(lang_dir))
+    tsv_path = Path(tsv_str)
+    audio_root = Path(audio_str)
 
     if not tsv_path.is_file():
         logger.error(f"Transcript not found: {tsv_path}")
@@ -167,17 +183,17 @@ def main() -> int:
 
     if args.verify_only:
         logger.info(f"Verifying staged FLEURS dataset at: {lang_dir}")
-        return 0 if verify_dataset(lang_dir, args.split) else 1
+        return 0 if verify_dataset(lang_dir, args.lang, args.split) else 1
 
-    if (lang_dir / f"{args.split}.tsv").is_file() and (lang_dir / args.split).is_dir():
+    if _staging_stage(lang_dir, args.lang, args.split).is_prestaged(str(lang_dir)):
         logger.info(f"Dataset already staged at {lang_dir} for split '{args.split}'")
         logger.info("Use --verify-only to check, or delete the directory to re-stage.")
-        return 0 if verify_dataset(lang_dir, args.split) else 1
+        return 0 if verify_dataset(lang_dir, args.lang, args.split) else 1
 
     if not stage_dataset(output_path, args.lang, args.split, args.cache_dir):
         return 1
 
-    return 0 if verify_dataset(lang_dir, args.split) else 1
+    return 0 if verify_dataset(lang_dir, args.lang, args.split) else 1
 
 
 if __name__ == "__main__":
