@@ -210,6 +210,7 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
     gpu_memory_utilization: float = 0.95
     kv_cache_dtype: str = "fp8"
     num_workers_override: int | None = None
+    skip_if_output_exists: bool = False
     resources: Resources = field(default_factory=lambda: Resources(gpus=1.0))
     batch_size: int = 64
 
@@ -489,6 +490,9 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
         prompts: list[str] = []
 
         for i, task in enumerate(tasks):
+            if self.skip_if_output_exists and task.data.get(self.output_text_key):
+                set_note(task.data, self.name, "skipped (output exists)", self.notes_key)
+                continue
             text = task.data.get(self.text_key, "")
             skip = task.data.get(self.skip_me_key, "")
             if skip:
