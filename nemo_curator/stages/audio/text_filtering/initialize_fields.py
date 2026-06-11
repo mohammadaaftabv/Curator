@@ -35,8 +35,9 @@ _DEFAULT_DROP_KEYS: list[str] = [
 
 _PIPELINE_OUTPUT_KEYS: set[str] = {
     "pnc_text",
-    "itn_text",
-    "itn_no-disfluencies_text",
+    "tn_raw",
+    "itn_raw",
+    "itn_clean",
     "captioning_text",
     "code_switched_text",
     "speech_qa_text",

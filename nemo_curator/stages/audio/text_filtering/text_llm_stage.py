@@ -490,7 +490,7 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
         prompts: list[str] = []
 
         for i, task in enumerate(tasks):
-            if self.skip_if_output_exists and task.data.get(self.output_text_key):
+            if self.skip_if_output_exists and self.output_text_key in task.data:
                 set_note(task.data, self.name, "skipped (output exists)", self.notes_key)
                 continue
             text = task.data.get(self.text_key, "")
