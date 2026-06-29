@@ -122,3 +122,25 @@ def test_preserves_int_shard_id() -> None:
     result = stage.process(task)
     assert result.data["shard_id"] == 42
     assert isinstance(result.data["shard_id"], int)
+
+
+def test_preserve_pipeline_outputs_true_keeps_output_keys() -> None:
+    stage = InitializeFieldsStage(
+        drop_keys=["pnc_text", "answer"],
+        preserve_pipeline_outputs=True,
+    )
+    task = AudioTask(data={"text": "t", "pnc_text": "existing output", "answer": "drop me"})
+    result = stage.process(task)
+    assert result.data["pnc_text"] == "existing output"
+    assert "answer" not in result.data
+
+
+def test_preserve_pipeline_outputs_false_drops_output_keys() -> None:
+    stage = InitializeFieldsStage(
+        drop_keys=["pnc_text", "answer"],
+        preserve_pipeline_outputs=False,
+    )
+    task = AudioTask(data={"text": "t", "pnc_text": "existing output", "answer": "drop me"})
+    result = stage.process(task)
+    assert "pnc_text" not in result.data
+    assert "answer" not in result.data
