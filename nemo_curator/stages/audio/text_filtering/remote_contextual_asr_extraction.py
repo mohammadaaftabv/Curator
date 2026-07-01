@@ -35,6 +35,7 @@ from nemo_curator.models.client.llm_client import GenerationConfig
 from nemo_curator.stages.audio.pipeline_utils import set_note
 from nemo_curator.stages.audio.text_filtering.contextual_asr_extraction import (
     ContextualASRExtractionStage,
+    _hq_skip,
     _normalize_extraction,
     _parse_json_response,
 )
@@ -182,6 +183,10 @@ class RemoteContextualASRExtractionStage(ContextualASRExtractionStage):
 
         for i, task in enumerate(tasks):
             text = task.data.get(self.text_key, "")
+            if self.high_quality_key and _hq_skip(task.data.get(self.high_quality_key)):
+                task.data[self.output_key] = None
+                set_note(task.data, self.name, "skipped (low_quality)", self.notes_key)
+                continue
             skip = task.data.get(self.skip_me_key, "")
             if skip:
                 task.data[self.output_key] = None

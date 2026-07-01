@@ -87,13 +87,13 @@ from nemo_curator.stages.resources import Resources
 from nemo_curator.tasks import AudioTask
 
 try:
-    from phonemizer import phonemize as _phonemize
+    from phonemizer.backend import EspeakBackend as _EspeakBackend
     from phonemizer.separator import Separator as _Separator
 
     PHONEMIZER_AVAILABLE = True
 except ImportError:
     PHONEMIZER_AVAILABLE = False
-    _phonemize = None  # type: ignore[assignment]
+    _EspeakBackend = None  # type: ignore[assignment]
     _Separator = None  # type: ignore[assignment]
 
 try:
@@ -167,26 +167,6 @@ def _normalize_lang_to_espeak(value: Any) -> str | None:  # noqa: ANN401
     return None
 
 
-def _phonemize_one(text: str, language: str) -> list[str]:
-    """G2P a single string into a flat list of IPA phoneme tokens."""
-    if not text or _phonemize is None or _Separator is None:
-        return []
-    sep = _Separator(phone=" ", word=f" {_WORD_BOUNDARY_MARKER} ", syllable="")
-    ipa = _phonemize(
-        text,
-        backend="espeak",
-        language=language,
-        separator=sep,
-        strip=True,
-        preserve_punctuation=False,
-        with_stress=False,
-        njobs=1,
-    )
-    if isinstance(ipa, list):
-        ipa = ipa[0] if ipa else ""
-    return [tok for tok in ipa.split() if tok and tok != _WORD_BOUNDARY_MARKER]
-
-
 def _npd(query: list[str], candidate: list[str]) -> float:
     if not query:
         return 1.0
@@ -195,20 +175,28 @@ def _npd(query: list[str], candidate: list[str]) -> float:
     return _editdistance.eval(query, candidate) / len(query)
 
 
-def _vocab_search(  # noqa: PLR0913
+# Extra neighbors cached beyond per_entity_top_k so per-utterance exclusion (the
+# entity's own terms + existing distractors) can be applied at the call site while
+# still leaving enough candidates — lets the NN result be cached per (language, entity).
+_SEARCH_CACHE_MARGIN = 16
+
+
+def _vocab_search(
     query_phonemes: list[str],
-    vocab_items: list[tuple[str, list[str]]],
+    len_index: dict[int, list[tuple[str, list[str]]]],
     *,
     min_npd: float,
     max_npd: float,
-    excluded_words: set[str],
     top_k: int,
 ) -> list[tuple[str, float]]:
-    """Brute-force nearest-neighbor search in the precomputed phoneme vocab.
+    """Nearest-neighbor search over a length-bucketed phoneme vocab.
 
-    Returns up to ``top_k`` ``(word, npd)`` pairs with the smallest NPD
-    satisfying ``min_npd < npd < max_npd``.  Words in ``excluded_words``
-    (case-insensitive match on the vocab key) are skipped.
+    NPD = editdistance(query, candidate) / len(query), and edit distance is at least
+    the length difference, so a candidate can satisfy ``npd < max_npd`` only when its
+    phoneme length lies in ``[q_len*(1-max_npd), q_len*(1+max_npd)]``. We therefore scan
+    only those length buckets instead of the full (~141k-word) vocab. Word exclusion is
+    applied by the caller so this result can be cached per (language, entity). Returns up
+    to ``top_k`` ``(word, npd)`` pairs with the smallest NPD in ``(min_npd, max_npd)``.
     """
     if not query_phonemes or top_k <= 0:
         return []
@@ -217,14 +205,14 @@ def _vocab_search(  # noqa: PLR0913
     len_hi = max(1, int(q_len * (1.0 + max_npd)) + 1)
 
     hits: list[tuple[str, float]] = []
-    for word, phonemes in vocab_items:
-        if word in excluded_words:
+    for clen in range(len_lo, len_hi + 1):
+        bucket = len_index.get(clen)
+        if not bucket:
             continue
-        if not (len_lo <= len(phonemes) <= len_hi):
-            continue
-        d = _npd(query_phonemes, phonemes)
-        if min_npd < d < max_npd:
-            hits.append((word, d))
+        for word, phonemes in bucket:
+            d = _npd(query_phonemes, phonemes)
+            if min_npd < d < max_npd:
+                hits.append((word, d))
 
     hits.sort(key=lambda kv: kv[1])
     return hits[:top_k]
@@ -298,6 +286,23 @@ class AcousticDistractorStage(ProcessingStage[AudioTask, AudioTask]):
     _vocab_items: list[tuple[str, list[str]]] = field(default_factory=list, init=False, repr=False)
     _vocab_by_lang: dict[str, list[tuple[str, list[str]]]] = field(default_factory=dict, init=False, repr=False)
     _g2p_cache: dict[tuple[str, str], list[str]] = field(default_factory=dict, init=False, repr=False)
+    # One reusable EspeakBackend per espeak language code, per actor process. phonemizer's
+    # top-level phonemize() builds a fresh EspeakBackend on EVERY call, which copies
+    # libespeak-ng.so to a tempdir and dlopen()s it without ever dlclose()-ing — so per-term
+    # calls leak VMA mappings until the process hits vm.max_map_count (65530) and every
+    # subsequent mmap fails with "failed to map segment from shared object". Reusing one
+    # backend per language collapses thousands of lib copies to one.
+    _espeak_backends: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
+    # Length-bucketed vocab index per language (built lazily): phoneme-length -> items,
+    # so _vocab_search scans only the valid length window instead of all ~141k words.
+    _len_index_cache: dict[str, dict[int, list[tuple[str, list[str]]]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    # Per-(language, entity) NN cache. Entities repeat heavily across utterances, so caching
+    # the raw neighbor list (excluded words filtered at the call site) skips the scan on repeats.
+    _search_cache: dict[tuple[str, str], list[tuple[str, float]]] = field(
+        default_factory=dict, init=False, repr=False
+    )
     _n_processed: int = field(default=0, init=False, repr=False)
     _n_appended: int = field(default=0, init=False, repr=False)
 
@@ -434,50 +439,96 @@ class AcousticDistractorStage(ProcessingStage[AudioTask, AudioTask]):
             return self._vocab_by_lang.get(language, [])
         return self._vocab_items
 
+    def _get_espeak_backend(self, language: str) -> Any:  # noqa: ANN401
+        """Return a reused EspeakBackend for ``language`` (built once per actor).
+
+        Avoids phonemizer's top-level ``phonemize()``, which constructs a new
+        backend — copying + dlopen()-ing libespeak-ng.so — on every call and
+        leaks VMA mappings until ``vm.max_map_count`` is exhausted.
+        """
+        backend = self._espeak_backends.get(language)
+        if backend is None:
+            backend = _EspeakBackend(
+                language,
+                preserve_punctuation=False,
+                with_stress=False,
+            )
+            self._espeak_backends[language] = backend
+        return backend
+
     def _g2p(self, text: str, language: str) -> list[str]:
         key = (language, text)
         cached = self._g2p_cache.get(key)
         if cached is not None:
             return cached
-        try:
-            phonemes = _phonemize_one(text, language)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("{}: phonemize failed for {!r} ({}): {}", self.name, text, language, exc)
-            phonemes = []
+        phonemes: list[str] = []
+        if text and _EspeakBackend is not None and _Separator is not None:
+            try:
+                backend = self._get_espeak_backend(language)
+                sep = _Separator(phone=" ", word=f" {_WORD_BOUNDARY_MARKER} ", syllable="")
+                out = backend.phonemize([text], separator=sep, strip=True)
+                ipa = out[0] if out else ""
+                phonemes = [tok for tok in ipa.split() if tok and tok != _WORD_BOUNDARY_MARKER]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("{}: phonemize failed for {!r} ({}): {}", self.name, text, language, exc)
+                phonemes = []
         self._g2p_cache[key] = phonemes
         return phonemes
+
+    def _get_len_index(self, language: str) -> dict[int, list[tuple[str, list[str]]]]:
+        """Lazily build + cache the phoneme-length -> items index for ``language``."""
+        idx = self._len_index_cache.get(language)
+        if idx is None:
+            idx = {}
+            for word, phonemes in self._vocab_for_language(language):
+                idx.setdefault(len(phonemes), []).append((word, phonemes))
+            self._len_index_cache[language] = idx
+        return idx
+
+    def _search_neighbors(self, entity: str, language: str) -> list[tuple[str, float]]:
+        """Top NN candidates for ``entity`` (NOT excluded-filtered), cached per (language, entity)."""
+        key = (language, entity)
+        cached = self._search_cache.get(key)
+        if cached is not None:
+            return cached
+        query = self._g2p(entity, language)
+        if not query:
+            result: list[tuple[str, float]] = []
+        else:
+            result = _vocab_search(
+                query,
+                self._get_len_index(language),
+                min_npd=self.min_npd,
+                max_npd=self.max_npd,
+                top_k=self.per_entity_top_k + _SEARCH_CACHE_MARGIN,
+            )
+        self._search_cache[key] = result
+        return result
 
     def _generate_acoustic_distractors(
         self,
         fine_terms: list[str],
         existing_distractors: list[str],
         language: str,
-        vocab_items: list[tuple[str, list[str]]],
     ) -> list[str]:
         """Return up to ``max_acoustic_distractors`` words from the vocab."""
-        if not fine_terms or not vocab_items:
+        if not fine_terms:
             return []
 
         excluded = {w.lower() for w in fine_terms} | {w.lower() for w in existing_distractors}
 
         scored: dict[str, float] = {}
         for entity in fine_terms:
-            query = self._g2p(entity, language)
-            if not query:
-                continue
-            for word, dist in _vocab_search(
-                query,
-                vocab_items,
-                min_npd=self.min_npd,
-                max_npd=self.max_npd,
-                excluded_words=excluded,
-                top_k=self.per_entity_top_k,
-            ):
-                if word in excluded:
+            taken = 0
+            for word, dist in self._search_neighbors(entity, language):
+                if word.lower() in excluded:
                     continue
                 prev = scored.get(word)
                 if prev is None or dist < prev:
                     scored[word] = dist
+                taken += 1
+                if taken >= self.per_entity_top_k:
+                    break
 
         ranked = sorted(scored.items(), key=lambda kv: kv[1])
         return [w for w, _ in ranked[: self.max_acoustic_distractors]]
@@ -523,7 +574,6 @@ class AcousticDistractorStage(ProcessingStage[AudioTask, AudioTask]):
             [str(t) for t in fine_terms],
             existing,
             language,
-            vocab_items,
         )
 
         self._n_processed += 1

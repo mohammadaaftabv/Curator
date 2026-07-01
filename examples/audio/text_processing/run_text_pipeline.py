@@ -329,6 +329,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="Input text field for context ASR extraction.",
     )
     ctx.add_argument(
+        "--context_asr_high_quality_key",
+        type=str,
+        default=None,
+        help=(
+            "Optional manifest key (e.g. 'high_quality'); records whose value at this key is "
+            "explicitly falsy are skipped (context_asr=None, note 'skipped (low_quality)'), so "
+            "ctx only runs on the kept subset. Missing key => processed. Unset disables gating."
+        ),
+    )
+    ctx.add_argument(
         "--context_asr_output_key",
         type=str,
         default="context_asr",
@@ -871,6 +881,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 prompt_file=context_asr_prompt,
                 text_key=context_asr_text_key,
                 source_lang_key="source_lang",
+                high_quality_key=args.context_asr_high_quality_key,
                 output_key=args.context_asr_output_key,
                 tensor_parallel_size=args.tensor_parallel_size,
                 max_output_tokens=args.context_asr_max_output_tokens,

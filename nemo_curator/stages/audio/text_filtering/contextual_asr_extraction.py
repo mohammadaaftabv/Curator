@@ -108,6 +108,15 @@ _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _JSON_OBJECT_RE = re.compile(r"\{[\s\S]*\}")
 
 
+def _hq_skip(value: Any) -> bool:  # noqa: ANN401
+    """True if a high_quality value is explicitly falsy (→ skip ctx). Missing (None) → process."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return not value
+    return str(value).strip().lower() in ("false", "0", "no", "")
+
+
 def _parse_json_response(raw: str) -> dict | None:
     sanitized = raw.strip()
     sanitized = _THINK_BLOCK_RE.sub("", sanitized).strip()
@@ -245,6 +254,10 @@ class ContextualASRExtractionStage(ProcessingStage[AudioTask, AudioTask]):
     default_source_lang: str = "English"
     output_key: str = "context_asr"
     skip_me_key: str = "_skipme"
+    # Optional gate: when set (e.g. "high_quality"), records whose value at this key is
+    # explicitly falsy are skipped (output_key=None, note "skipped (low_quality)"), so ctx
+    # only runs on the kept subset. Missing key => processed (back-compat). None disables gating.
+    high_quality_key: str | None = None
     notes_key: str = "additional_notes"
     tensor_parallel_size: int | None = None
     max_output_tokens: int = 2048
@@ -385,6 +398,10 @@ class ContextualASRExtractionStage(ProcessingStage[AudioTask, AudioTask]):
                 set_note(task.data, self.name, "skipped (output exists)", self.notes_key)
                 continue
             text = task.data.get(self.text_key, "")
+            if self.high_quality_key and _hq_skip(task.data.get(self.high_quality_key)):
+                task.data[self.output_key] = None
+                set_note(task.data, self.name, "skipped (low_quality)", self.notes_key)
+                continue
             skip = task.data.get(self.skip_me_key, "")
             if skip:
                 task.data[self.output_key] = None
