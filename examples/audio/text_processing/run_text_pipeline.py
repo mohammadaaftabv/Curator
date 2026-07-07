@@ -98,6 +98,7 @@ from nemo_curator.stages.audio.text_filtering.remote_contextual_asr_extraction i
     RemoteContextualASRExtractionStage,
 )
 from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
+from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 from nemo_curator.stages.resources import Resources
@@ -124,6 +125,7 @@ _CONTEXT_ASR_MIN_MAX_MODEL_LEN = 4096
 _CODE_SWITCHING_PROMPT = _PROMPT_DIR / "code_switching_prompt.md"
 _SPEECH_QA_PROMPT = _PROMPT_DIR / "speech_qa_prompt.md"
 _LANGUAGE_ID_PROMPT = _PROMPT_DIR / "language_id_prompt.md"
+_RECOVER_ENTITIES_PROMPT = _PROMPT_DIR / "recover_entities_prompt.md"
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
@@ -439,6 +441,73 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         ),
     )
 
+    re = ap.add_argument_group("recover entities")
+    re.add_argument(
+        "--enable_recover_entities",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable RecoverEntities stage (runs BEFORE all other LLM stages): rewrites the normalized "
+            "transcription so its named entities use the ground-truth spelling/casing. Routed to the "
+            "shared Dynamo inference server, so it REQUIRES --use_inference_server. Output key: "
+            "--recover_entities_output_key (default entity_recovered_text)."
+        ),
+    )
+    re.add_argument(
+        "--recover_entities_prompt_file",
+        type=str,
+        default=None,
+        help="Path to the RecoverEntities prompt file. Defaults to bundled recover_entities_prompt.md.",
+    )
+    re.add_argument(
+        "--recover_entities_ground_truth_key",
+        type=str,
+        default="granary_v1_prediction",
+        help="Manifest field holding the ground-truth/INITIAL transcription (source of correct entity forms).",
+    )
+    re.add_argument(
+        "--recover_entities_normalized_key",
+        type=str,
+        default="abbreviated_text",
+        help="Manifest field holding the normalized transcription (entities are recovered into a copy of this).",
+    )
+    re.add_argument(
+        "--recover_entities_output_key",
+        type=str,
+        default="entity_recovered_text",
+        help="Output field for the normalized text with recovered entity forms.",
+    )
+    re.add_argument(
+        "--recover_entities_max_output_tokens",
+        type=int,
+        default=1024,
+        help="Max tokens generated per sample for entity recovery.",
+    )
+    re.add_argument(
+        "--recover_entities_max_model_len",
+        type=int,
+        default=4096,
+        help=(
+            "vLLM max_model_len required by RecoverEntities. When --use_inference_server is set, the "
+            "shared server's max_model_len is raised to cover this value."
+        ),
+    )
+    re.add_argument(
+        "--recover_entities_num_workers",
+        type=int,
+        default=None,
+        help="Explicit Ray actor count for the RecoverEntities stage. Overrides --num_workers for that stage only.",
+    )
+    re.add_argument(
+        "--recover_entities_max_concurrent_requests",
+        type=int,
+        default=None,
+        help=(
+            "Max concurrent requests for the RecoverEntities stage. Overrides "
+            "--inference_max_concurrent_requests for that stage only."
+        ),
+    )
+
     ap.add_argument(
         "--tensor_parallel_size", type=int, default=None, help="GPUs for tensor parallelism (default: auto-detect)."
     )
@@ -611,13 +680,20 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         and not args.enable_context_asr
         and not args.enable_code_switching
         and not args.enable_speech_qa
+        and not args.enable_recover_entities
     ):
         logger.warning(
-            "No stages enabled. Use --enable_pnc, --enable_tn, --enable_language_id, --enable_itn, "
-            "--enable_itn_no-disfluencies, --enable_captioning, --enable_context_asr, --enable_code_switching, "
-            "or --enable_speech_qa."
+            "No stages enabled. Use --enable_recover_entities, --enable_pnc, --enable_tn, --enable_language_id, "
+            "--enable_itn, --enable_itn_no-disfluencies, --enable_captioning, --enable_context_asr, "
+            "--enable_code_switching, or --enable_speech_qa."
         )
         return
+
+    # RecoverEntities is only implemented against the shared Dynamo inference
+    # server (no in-process variant), so it requires --use_inference_server.
+    if args.enable_recover_entities and not args.use_inference_server:
+        msg = "--enable_recover_entities requires --use_inference_server (RecoverEntities runs on the Dynamo server)."
+        raise ValueError(msg)
 
     # ── Optional Dynamo inference server ─────────────────────────────
     # Two modes:
@@ -649,6 +725,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         server_max_len = args.max_model_len
         if args.enable_context_asr:
             server_max_len = max(server_max_len, args.context_asr_max_model_len)
+        if args.enable_recover_entities:
+            server_max_len = max(server_max_len, args.recover_entities_max_model_len)
         engine_kwargs = {
             "tensor_parallel_size": server_tp,
             "max_model_len": server_max_len,
@@ -735,17 +813,78 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     use_fusing = bool(args.fuse_stages and remote_base_url)
     fuseable_sub_stages: list[RemoteTextLLMStage] = []
 
-    # ITN reads tn_raw (TN's spoken form) when TN is enabled, else pnc_text.
-    itn_input_key = args.tn_output_key if args.enable_tn else args.text_key
-    # Captioning/CodeSwitching/SpeechQA read TN's output (tn_raw) when TN is on, else pnc_text.
+    # entity_recovered_text (when RecoverEntities ran) is the entity-corrected
+    # normalized text. It supersedes the raw abbreviated_text/pnc_text as the
+    # transcript the downstream LLM stages read. The "current best" transcript
+    # threads through the chain:
+    #   abbreviated_text/manifest -> (RecoverEntities) entity_recovered_text
+    #                             -> (PnC) pnc_text -> TN/ITN/Captioning/...
+    # so each stage reads the freshest key produced before it.
+    recovered_key = args.recover_entities_output_key if args.enable_recover_entities else None
+    # RecoverEntities (when on) reads abbreviated_text + granary_v1_prediction and
+    # writes recovered_key. How that reaches the rest of the pipeline:
+    #   - PnC ON : PnC reads recovered_key and republishes pnc_text, which the
+    #              downstream stages already read by default → nothing else changes.
+    #   - PnC OFF: no pnc_text is regenerated, so the downstream stages read
+    #              recovered_key directly (via downstream_recovered below).
+    # When RecoverEntities is OFF, downstream_recovered is None and every key below
+    # falls back to its original value — the pipeline is byte-for-byte unchanged.
+    downstream_recovered = recovered_key if (recovered_key and not args.enable_pnc) else None
+    base_text_key = downstream_recovered or args.text_key  # TN / ITN(no-TN) / Captioning / CS / QA
+    langid_text_key = downstream_recovered or "pnc_text"  # LanguageID (originally hardcoded pnc_text)
+
+    # ITN reads tn_raw (TN's spoken form) when TN is enabled, else the base text.
+    itn_input_key = args.tn_output_key if args.enable_tn else base_text_key
+    # Captioning/CodeSwitching/SpeechQA read TN's output (tn_raw) when TN is on, else the base text.
     post_tn_text_key = itn_input_key
 
     stages = [
         ALMManifestReader(manifest_path=args.input_manifest, output_dir=args.output_dir, fanout=False),
     ]
 
+    # RecoverEntities runs FIRST, before every other LLM stage: it rewrites the
+    # normalized transcription so its named entities regain the ground-truth
+    # spelling/casing. Only the Dynamo-server (remote) variant is wired here.
+    if args.enable_recover_entities:
+        recover_entities_prompt = args.recover_entities_prompt_file or str(_RECOVER_ENTITIES_PROMPT)
+        stages.append(
+            RemoteRecoverEntitiesStage(
+                model_id=args.model_id,
+                prompt_file=recover_entities_prompt,
+                ground_truth_key=args.recover_entities_ground_truth_key,
+                normalized_key=args.recover_entities_normalized_key,
+                output_text_key=args.recover_entities_output_key,
+                tensor_parallel_size=args.tensor_parallel_size,
+                max_output_tokens=args.recover_entities_max_output_tokens,
+                max_model_len=args.recover_entities_max_model_len,
+                max_num_seqs=args.max_num_seqs,
+                gpu_memory_utilization=args.gpu_memory_utilization,
+                kv_cache_dtype=args.kv_cache_dtype,
+                num_workers_override=(
+                    args.recover_entities_num_workers
+                    if args.recover_entities_num_workers is not None
+                    else args.num_workers
+                ),
+                batch_size=args.batch_size,
+                **{
+                    **remote_kwargs,
+                    **(
+                        {"max_concurrent_requests": args.recover_entities_max_concurrent_requests}
+                        if args.recover_entities_max_concurrent_requests is not None and remote_kwargs
+                        else {}
+                    ),
+                },
+            )
+        )
+        logger.info(
+            f"RecoverEntities stage enabled: ({args.recover_entities_ground_truth_key} + "
+            f"{args.recover_entities_normalized_key}) → {args.recover_entities_output_key}"
+        )
+
     if args.enable_pnc:
-        pnc_input_key = "abbreviated_text" if args.text_key == "pnc_text" else args.text_key
+        # When RecoverEntities ran, PnC punctuates the entity-recovered text;
+        # otherwise it reads the raw normalized text (abbreviated_text by default).
+        pnc_input_key = recovered_key or ("abbreviated_text" if args.text_key == "pnc_text" else args.text_key)
         stages.append(
             text_stage_cls(
                 name="PnCRestoration",
@@ -765,7 +904,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         _language_id_stage = text_stage_cls(
             name="LanguageID",
             prompt_file=language_id_prompt,
-            text_key="pnc_text",
+            text_key=langid_text_key,
             output_text_key="llm_language_prediction",
             enable_validation=False,
             **shared_model_kwargs,
@@ -787,7 +926,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         _tn_stage = text_stage_cls(
             name="TextNormalization",
             prompt_file=tn_prompt,
-            text_key=args.text_key,
+            text_key=base_text_key,
             output_text_key=args.tn_output_key,
             enable_validation=not args.disable_tn_validation,
             validation_mode="tn",
@@ -798,7 +937,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         stages.append(_tn_stage)
         logger.info(
             "TN stage enabled: %s → %s (validation=%s, mode=tn)",
-            args.text_key,
+            base_text_key,
             args.tn_output_key,
             not args.disable_tn_validation,
         )
@@ -871,7 +1010,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         logger.info(f"Captioning stage enabled: {post_tn_text_key} → {args.captioning_output_key}")
 
     if args.enable_context_asr:
+        # Honor an explicit --context_asr_text_key. Only when it is left at its
+        # "pnc_text" default AND recovery is feeding downstream directly (PnC off)
+        # do we route it to the recovered text.
         context_asr_text_key = args.context_asr_text_key
+        if downstream_recovered and args.context_asr_text_key == "pnc_text":
+            context_asr_text_key = downstream_recovered
         # This stage runs as its own Ray Data actor with its own vLLM engine, so it
         # uses its own engine kwargs — note context_asr_max_model_len (8192), larger
         # than the global --max_model_len (2048) used by the lightweight stages.
