@@ -15,5 +15,7 @@
 """Text filtering stages for ASR postprocessing."""
 
 from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
+from nemo_curator.stages.audio.text_filtering.recover_entities import RecoverEntitiesStage
+from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 
-__all__ = ["FusedRemoteTextLLMStage"]
+__all__ = ["FusedRemoteTextLLMStage", "RecoverEntitiesStage", "RemoteRecoverEntitiesStage"]
