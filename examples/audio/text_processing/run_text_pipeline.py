@@ -247,6 +247,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=42,
         help="Base RNG seed for per-sample prompt-template sampling in the instruction packer.",
     )
+    ap.add_argument(
+        "--instruction_packer_translations_key",
+        type=str,
+        default="translations",
+        help="Source field holding the per-target-language translation dict packed as 'translation' instructions.",
+    )
+    ap.add_argument(
+        "--instruction_packer_min_translation_score",
+        type=float,
+        default=0.7,
+        help="Minimum translation_quality_score required to pack a translation; set to 0 to pack all non-empty translations.",
+    )
 
     ap.add_argument("--text_key", type=str, default="pnc_text", help="Input text field from ASR pipeline output.")
     ap.add_argument("--tn_output_key", type=str, default="tn_raw", help="Output field for TN result.")
@@ -1146,6 +1158,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 code_switched_key=args.code_switching_output_key,
                 speech_qa_key=args.speech_qa_output_key,
                 transcription_target_key=args.pnc_output_key,
+                translations_key=args.instruction_packer_translations_key,
+                min_translation_score=args.instruction_packer_min_translation_score,
                 seed=args.instruction_packer_seed,
             )
         )
