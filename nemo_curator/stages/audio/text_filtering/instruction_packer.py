@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 from nemo_curator.stages.base import ProcessingStage
 from nemo_curator.stages.resources import Resources
+from nemo_curator.stages.text.utils.text_utils import get_language_name
 from nemo_curator.tasks import AudioTask
 
 # ─────────────────────────────────────────────────────────────
@@ -114,6 +115,23 @@ _CODE_SWITCH_PROMPTS: list[str] = [
     "Write a transcript that reflects the real code-switched utterance — English words in English, native words in native script.",
 ]
 
+# Translation prompts. Two flavors — target-only (source implicit) and
+# source+target explicit. Every template accepts {source_lang} and {target_lang}
+# kwargs (str.format ignores the unused one), so any template fits any row.
+_TRANSLATE_PROMPTS: list[str] = [
+    # target-only (source implicit)
+    "Translate this audio into {target_lang}.",
+    "Listen to the audio and translate what is said into {target_lang}.",
+    "Provide a {target_lang} translation of the speech in this recording.",
+    "Translate the spoken content of this audio into {target_lang}.",
+    "Render what is said in this clip as {target_lang} text.",
+    # source + target explicit
+    "This is {source_lang} speech. Translate it into {target_lang}.",
+    "Translate the following {source_lang} audio into {target_lang}.",
+    "Listen to this {source_lang} recording and translate it into {target_lang}.",
+    "Convert the {source_lang} speech in this audio into {target_lang} text.",
+]
+
 _CONTEXT_ASR_VARIANT_KEYS: list[str] = [
     "coarse_context_prompt",
     "fine_context_prompt",
@@ -169,6 +187,14 @@ class InstructionPackerStage(ProcessingStage[AudioTask, AudioTask]):
             Resolution order: ``tn_key`` → this key (``pnc_text``) → ``cleaned_text``.
         source_lang_key: Field name holding the per-sample source
             language; copied into each entry's ``tags.target_lang``.
+        translations_key: Source field holding the per-target-language
+            translation dict (``{lang: {"translation_raw", "translation_quality_score", ...}}``).
+            One entry is emitted per kept target with ``tags.target_lang`` set to
+            the actual target language (the only type where target differs from source).
+        min_translation_score: Minimum ``translation_quality_score`` required to
+            pack a translation. The upstream pipeline itself applies no QE gate
+            (it keeps every target of a high-quality row), so this filter is
+            enforced here; lower it to ``0`` to pack all non-empty translations.
         notes_key: Field holding the ``additional_notes`` dict of
             per-stage decisions.
         pnc_note_key: Key within ``additional_notes`` recording the PnC
@@ -195,6 +221,9 @@ class InstructionPackerStage(ProcessingStage[AudioTask, AudioTask]):
     context_asr_key: str = "context_asr"
     transcription_target_key: str = "pnc_text"
     source_lang_key: str = "source_lang"
+
+    translations_key: str = "translations"
+    min_translation_score: float = 0.7
 
     notes_key: str = "additional_notes"
     pnc_note_key: str = "PnCRestoration"
@@ -285,6 +314,31 @@ class InstructionPackerStage(ProcessingStage[AudioTask, AudioTask]):
                                 "tags": make_tags(f"context_asr-{vkey.removesuffix('_prompt')}"),
                             }
                         )
+
+        translations = data.get(self.translations_key)
+        if isinstance(translations, dict):
+            # `target_lang` above holds the per-sample *source* language (see make_tags).
+            source_lang_name = get_language_name(target_lang) if target_lang else ""
+            for tgt_code in sorted(translations):
+                entry = translations[tgt_code]
+                if not isinstance(entry, dict):
+                    continue
+                raw = entry.get("translation_raw")
+                if not self._nonempty(raw):
+                    continue
+                score = entry.get("translation_quality_score")
+                if not isinstance(score, (int, float)) or score < self.min_translation_score:
+                    continue
+                prompt = rng.choice(_TRANSLATE_PROMPTS).format(
+                    source_lang=source_lang_name, target_lang=get_language_name(tgt_code)
+                )
+                pairs.append(
+                    {
+                        "prompt": prompt,
+                        "target": raw.strip(),
+                        "tags": {"type": "translation", "target_lang": tgt_code},
+                    }
+                )
 
         return pairs
 
