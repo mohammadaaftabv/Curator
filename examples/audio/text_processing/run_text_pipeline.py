@@ -524,6 +524,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         "--tensor_parallel_size", type=int, default=None, help="GPUs for tensor parallelism (default: auto-detect)."
     )
     ap.add_argument("--max_model_len", type=int, default=2048)
+    ap.add_argument(
+        "--max_num_batched_tokens",
+        type=int,
+        default=None,
+        help="vLLM max_num_batched_tokens forwarded to the inference-server engine "
+        "(None = vLLM default). Tuning knob for e.g. the gemma-4 recipe's max_batched_8k.",
+    )
+    ap.add_argument(
+        "--language_model_only",
+        action="store_true",
+        help="Serve a multimodal model (e.g. gemma-4) as LANGUAGE-MODEL-ONLY: skip the vision/audio "
+        "encoders (we only send text). Passes vLLM --language-model-only to the inference-server engine. "
+        "Much lighter/faster/more-stable load and removes the multimodal max_num_batched_tokens>=2496 "
+        "constraint. No effect on text-only models.",
+    )
     ap.add_argument("--max_num_seqs", type=int, default=256)
     ap.add_argument("--max_output_tokens", type=int, default=512)
     ap.add_argument("--gpu_memory_utilization", type=float, default=0.95)
@@ -747,6 +762,18 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             "trust_remote_code": True,
             "max_num_seqs": args.max_num_seqs,
         }
+        # Fixed torch.compile cache dir (opt-in): vLLM's default key hashes traced-file paths, which
+        # sit under Ray's per-session dir -> unique per lane -> never reused. An explicit cache_dir
+        # makes vLLM reuse one graph across lanes (backends.py: `if not compilation_config.cache_dir`).
+        _compile_cache = os.environ.get("VLLM_COMPILE_CACHE_DIR")
+        if _compile_cache:
+            engine_kwargs["compilation_config"] = {"cache_dir": _compile_cache}
+        if args.max_num_batched_tokens is not None:
+            engine_kwargs["max_num_batched_tokens"] = args.max_num_batched_tokens
+        if args.language_model_only:
+            # gemma-4 is multimodal; we only send text. LM-only skips the vision/audio towers
+            # -> lighter, faster, stable load + no --disable_chunked_mm_input / mm-token constraint.
+            engine_kwargs["language_model_only"] = True
         if server_tp == 1:
             # TP=1: force the uniprocessor executor so each replica skips
             # torch.distributed init (no TCPStore / rendezvous port). For TP>1 leave
