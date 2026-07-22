@@ -7,6 +7,8 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from nemo_curator.core.serve.dynamo.admission_proxy import (
     AdmissionProxy,
@@ -126,6 +128,51 @@ async def test_overloaded_request_returns_openai_429_and_updates_telemetry() -> 
     metrics = proxy._proxy_metrics().text
     assert "curator_admission_queue_rejections_total 1" in metrics
     assert "curator_admission_multiplicative_decreases_total 1" in metrics
+
+
+@pytest.mark.asyncio
+async def test_gateway_forwards_openai_request_and_response() -> None:
+    async def complete(request: web.Request) -> web.Response:
+        return web.json_response({"received": await request.json()})
+
+    async def metrics(_request: web.Request) -> web.Response:
+        return web.Response(text="vllm:num_requests_waiting 0\n")
+
+    upstream_app = web.Application()
+    upstream_app.router.add_post("/v1/chat/completions", complete)
+    upstream_app.router.add_get("/metrics", metrics)
+    upstream = TestServer(upstream_app)
+    await upstream.start_server()
+
+    args = _parser().parse_args(
+        [
+            "--port",
+            "8000",
+            "--upstream",
+            str(upstream.make_url("/")).rstrip("/"),
+            "--metrics-url",
+            str(upstream.make_url("/metrics")),
+            "--max-waiting-requests",
+            "0",
+        ]
+    )
+    proxy = AdmissionProxy(args)
+    gateway_app = web.Application()
+    gateway_app.router.add_route("*", "/{path_info:.*}", proxy.handle)
+    gateway_app.on_startup.append(proxy.start)
+    gateway_app.on_cleanup.append(proxy.close)
+    client = TestClient(TestServer(gateway_app))
+    await client.start_server()
+
+    try:
+        response = await client.post("/v1/chat/completions", json={"model": "gemma", "messages": []})
+        assert response.status == 200
+        assert await response.json() == {"received": {"model": "gemma", "messages": []}}
+        assert proxy.forwarded_requests_total == 1
+        assert proxy.aimd.in_flight == 0
+    finally:
+        await client.close()
+        await upstream.close()
 
 
 @pytest.mark.parametrize(("value", "expected"), [("2", 2.0), ("0.25", 0.25), (None, None), ("date", None)])
