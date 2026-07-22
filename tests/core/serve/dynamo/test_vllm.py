@@ -117,6 +117,18 @@ class TestLaunchReplicas:
         assert "--headless" not in python_args
         assert "--nnodes" not in python_args
 
+    def test_first_worker_preserves_explicit_system_metrics_port(
+        self,
+        captured_spawn: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DYN_SYSTEM_PORT", "12345")
+        mc = DynamoVLLMModelConfig(model_identifier="Qwen/Qwen3-0.6B", num_replicas=1)
+
+        self._launch(mc, topology=_SINGLE_NODE_1GPU)
+
+        assert captured_spawn[0]["subprocess_env"]["DYN_SYSTEM_PORT"] == "12345"
+
     def test_kv_router_enables_exact_kv_events(self, captured_spawn: list[dict[str, Any]]) -> None:
         mc = DynamoVLLMModelConfig(model_identifier="Qwen/Qwen3-0.6B", num_replicas=1)
         self._launch(mc, topology=_SINGLE_NODE_1GPU, router_mode="kv", router_kv_events=True)

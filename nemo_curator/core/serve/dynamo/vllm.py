@@ -414,7 +414,11 @@ def _launch_vllm_worker(  # noqa: PLR0913
     python_args += _async_scheduling_cli_flags(model_config.engine_kwargs)
 
     label = build_worker_actor_name(model_name, replica_index, node_rank, tp_size)
-    configured_metrics_port = base_env.get("DYN_SYSTEM_PORT") if replica_index == 0 and node_rank == 0 else None
+    configured_metrics_port = (
+        base_env.get("DYN_SYSTEM_PORT") or os.environ.get("DYN_SYSTEM_PORT")
+        if replica_index == 0 and node_rank == 0
+        else None
+    )
     metrics_port_seed = 18081 + zlib.crc32(f"{component}:{replica_index}:{node_rank}".encode()) % 10000
     metrics_port = (
         int(configured_metrics_port)
@@ -589,7 +593,11 @@ def _launch_disagg_role(  # noqa: PLR0913
         python_args += _async_scheduling_cli_flags(engine_kwargs)
 
         label = build_worker_actor_name(model_name, i, 0, tp_size, role=role)
-        configured_metrics_port = base_env.get("DYN_SYSTEM_PORT") if worker_index == 0 else None
+        configured_metrics_port = (
+            base_env.get("DYN_SYSTEM_PORT") or os.environ.get("DYN_SYSTEM_PORT")
+            if worker_index == 0
+            else None
+        )
         metrics_seed = 18081 + zlib.crc32(f"{component}:{role}:{worker_index}".encode()) % 10000
         metrics_port = (
             int(configured_metrics_port)
