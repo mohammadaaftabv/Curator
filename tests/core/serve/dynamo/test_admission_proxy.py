@@ -175,6 +175,62 @@ async def test_gateway_forwards_openai_request_and_response() -> None:
         await upstream.close()
 
 
+@pytest.mark.asyncio
+async def test_upstream_429_is_forwarded_and_reduces_shared_aimd_window() -> None:
+    async def rate_limited(_request: web.Request) -> web.Response:
+        return web.json_response(
+            {"error": {"type": "rate_limit_error"}},
+            status=429,
+            headers={"Retry-After": "0.25"},
+        )
+
+    async def metrics(_request: web.Request) -> web.Response:
+        return web.Response(text="vllm:num_requests_waiting 0\n")
+
+    upstream_app = web.Application()
+    upstream_app.router.add_post("/v1/chat/completions", rate_limited)
+    upstream_app.router.add_get("/metrics", metrics)
+    upstream = TestServer(upstream_app)
+    await upstream.start_server()
+
+    args = _parser().parse_args(
+        [
+            "--port",
+            "8000",
+            "--upstream",
+            str(upstream.make_url("/")).rstrip("/"),
+            "--metrics-url",
+            str(upstream.make_url("/metrics")),
+            "--max-waiting-requests",
+            "0",
+            "--max-concurrent-requests",
+            "100",
+        ]
+    )
+    proxy = AdmissionProxy(args)
+    gateway_app = web.Application()
+    gateway_app.router.add_route("*", "/{path_info:.*}", proxy.handle)
+    gateway_app.on_startup.append(proxy.start)
+    gateway_app.on_cleanup.append(proxy.close)
+    client = TestClient(TestServer(gateway_app))
+    await client.start_server()
+
+    try:
+        response = await client.post("/v1/chat/completions", json={"model": "gemma", "messages": []})
+        assert response.status == 429
+        assert response.headers["Retry-After"] == "0.25"
+        assert await response.json() == {"error": {"type": "rate_limit_error"}}
+        assert proxy.forwarded_requests_total == 1
+        assert proxy.upstream_429_total == 1
+        assert proxy.aimd.rate_limit_events_total == 1
+        assert proxy.aimd.multiplicative_decreases_total == 1
+        assert proxy.aimd.current_limit == 75
+        assert proxy.aimd.in_flight == 0
+    finally:
+        await client.close()
+        await upstream.close()
+
+
 @pytest.mark.parametrize(("value", "expected"), [("2", 2.0), ("0.25", 0.25), (None, None), ("date", None)])
 def test_parse_retry_after(value: str | None, expected: float | None) -> None:
     assert _parse_retry_after(value) == expected
