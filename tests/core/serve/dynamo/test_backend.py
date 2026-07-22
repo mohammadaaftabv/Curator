@@ -27,7 +27,7 @@ import pytest
 import nemo_curator.core.serve.dynamo.backend as dynamo_backend
 from nemo_curator.core.serve import DynamoServerConfig, DynamoVLLMModelConfig, InferenceServer
 from nemo_curator.core.serve.dynamo.backend import DynamoBackend
-from nemo_curator.core.serve.dynamo.config import DynamoRoleConfig, DynamoRouterConfig
+from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig, DynamoRoleConfig, DynamoRouterConfig
 
 # ---------------------------------------------------------------------------
 # Backend-level validators
@@ -273,15 +273,30 @@ class TestDynamoBackendLaunchFrontend:
         ]
         assert captured_spawn[0]["subprocess_env"] == {}
 
-    def test_frontend_system_port_does_not_collide_with_worker_metrics(
-        self, captured_spawn: list[dict[str, Any]]
-    ) -> None:
-        backend_cfg = DynamoServerConfig()
+    def test_admission_proxy_receives_queue_and_aimd_config(self, captured_spawn: list[dict[str, Any]]) -> None:
+        backend_cfg = DynamoServerConfig(
+            admission=DynamoAdmissionConfig(
+                max_waiting_requests=2048,
+                max_concurrent_requests=8192,
+                retry_after_seconds=3.0,
+            )
+        )
         backend = self._make_backend(backend_cfg)
 
-        backend._launch_frontend(port=9999, base_env={}, backend_cfg=backend_cfg, system_port=8082)
+        with mock.patch.object(dynamo_backend, "_wait_for_port"):
+            backend._launch_admission_proxy(
+                port=9999,
+                upstream="http://10.0.0.1:10000",
+                metrics_urls=["http://10.0.0.2:18081/metrics"],
+                config=backend_cfg.admission,
+            )
 
-        assert captured_spawn[0]["subprocess_env"] == {"DYN_SYSTEM_PORT": "8082"}
+        args = captured_spawn[0]["python_args"]
+        assert args[:2] == ["-m", "nemo_curator.core.serve.dynamo.admission_proxy"]
+        assert args[args.index("--max-waiting-requests") + 1] == "2048"
+        assert args[args.index("--max-concurrent-requests") + 1] == "8192"
+        assert args[args.index("--metrics-url") + 1] == "http://10.0.0.2:18081/metrics"
+        assert args[args.index("--retry-after-seconds") + 1] == "3.0"
 
     def test_kv_mode_without_events_emits_no_router_kv_events(self, captured_spawn: list[dict[str, Any]]) -> None:
         backend_cfg = DynamoServerConfig(router=DynamoRouterConfig(mode="kv", kv_events=False))

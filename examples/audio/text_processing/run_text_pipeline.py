@@ -101,6 +101,7 @@ from nemo_curator.stages.audio.text_filtering.remote_contextual_asr_extraction i
 from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
+from nemo_curator.stages.audio.text_filtering.sampling import parse_stage_sampling_config, sampling_for_stage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 from nemo_curator.stages.resources import Resources
 
@@ -140,6 +141,22 @@ def _json_object(value: str) -> dict:
         msg = f"Expected a JSON object, got {type(parsed).__name__}"
         raise argparse.ArgumentTypeError(msg)
     return parsed
+
+
+def _sampling_for_stage(
+    args: argparse.Namespace,
+    stage: str,
+    *,
+    default_temperature: float | None = None,
+    default_top_p: float | None = None,
+) -> dict[str, float]:
+    """Resolve a stage override over its backwards-compatible defaults."""
+    return sampling_for_stage(
+        stage_sampling_config=args.stage_sampling_config,
+        stage=stage,
+        default_temperature=args.temperature if default_temperature is None else default_temperature,
+        default_top_p=args.top_p if default_top_p is None else default_top_p,
+    )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
@@ -568,6 +585,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="Nucleus-sampling probability for the generic text stages (default: 1.0).",
     )
     ap.add_argument(
+        "--stage_sampling_config",
+        type=parse_stage_sampling_config,
+        default={},
+        metavar="JSON",
+        help=(
+            "Per-stage sampling overrides. Keys: recover_entities, pnc, language_id, tn, itn, "
+            "itn_no_disfluencies, captioning, context_asr, code_switching, speech_qa. Each value "
+            "may set temperature and/or top_p, for example "
+            '\'{"pnc":{"temperature":0},"speech_qa":{"temperature":0.7,"top_p":0.95}}\'. '
+            "Global --temperature/--top_p remain fallbacks for generic text stages."
+        ),
+    )
+    ap.add_argument(
         "--speculative_config",
         type=_json_object,
         default=None,
@@ -658,9 +688,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         type=int,
         default=None,
         help=(
-            "Enable Prometheus-driven client backpressure and pause new requests while the configured "
-            "queue metric is at or above this value. None disables the queue gate."
+            "Enable the model-level Dynamo admission gateway. It returns HTTP 429 when the vLLM "
+            "queue is greater than this value and applies shared AIMD concurrency control. None disables it."
         ),
+    )
+    srv.add_argument(
+        "--inference_admission_max_concurrent_requests",
+        type=int,
+        default=8192,
+        help="Hard ceiling for the shared model-level AIMD window (default: 8192, matching the optimized workflow).",
     )
     srv.add_argument(
         "--inference_queue_poll_interval_seconds",
@@ -687,13 +723,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="Prometheus metric used for queue backpressure.",
     )
     srv.add_argument(
+        "--inference_queue_aggregation",
+        choices=["min", "max", "sum"],
+        default="min",
+        help=(
+            "Aggregate queue depth across vLLM replicas. 'min' rejects only when every replica is overloaded, "
+            "matching retry-another-backend behavior (default)."
+        ),
+    )
+    srv.add_argument(
         "--inference_queue_metrics_url",
         type=str,
         default=None,
         help=(
-            "Prometheus endpoint exporting --inference_queue_metric_name. This is required when the "
-            "pipeline starts local Dynamo because the OpenAI frontend does not aggregate the worker's "
-            "vLLM metrics (the default single-worker endpoint is http://<worker-host>:8081/metrics)."
+            "Optional explicit Prometheus endpoint exporting --inference_queue_metric_name. Local Dynamo "
+            "otherwise discovers the unique metrics endpoint assigned to each vLLM worker automatically."
+        ),
+    )
+    srv.add_argument(
+        "--inference_client_queue_gate",
+        action="store_true",
+        help=(
+            "Additionally retain the earlier proactive client-side metric gate. Requires "
+            "--inference_queue_metrics_url. Normally leave this off so server 429s drive shared AIMD."
         ),
     )
     srv.add_argument(
@@ -701,6 +753,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         action="store_true",
         help="Fail requests when queue metrics are unavailable. Default is fail-open.",
     )
+    srv.add_argument("--inference_aimd_reduce_factor", type=float, default=0.75)
+    srv.add_argument("--inference_aimd_additive_increase", type=int, default=1)
+    srv.add_argument("--inference_aimd_success_window", type=int, default=25)
+    srv.add_argument("--inference_aimd_cooldown_seconds", type=float, default=2.0)
+    srv.add_argument("--inference_aimd_ceiling_overshoot", type=float, default=0.10)
+    srv.add_argument("--inference_aimd_rampup_seconds", type=float, default=0.0)
     srv.add_argument(
         "--inference_health_timeout",
         type=int,
@@ -815,21 +873,20 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         msg = "--enable_recover_entities requires --use_inference_server (RecoverEntities runs on the Dynamo server)."
         raise ValueError(msg)
 
-    if args.inference_queue_max_waiting_requests is not None:
-        if not args.use_inference_server:
-            msg = "--inference_queue_max_waiting_requests requires --use_inference_server."
-            raise ValueError(msg)
-        if not args.inference_queue_metrics_url:
-            msg = (
-                "--inference_queue_metrics_url is required with local Dynamo queue backpressure. "
-                "The Dynamo OpenAI frontend does not export the worker's vllm:num_requests_waiting metric; "
-                "point this option at the vLLM worker /metrics endpoint (normally "
-                "http://<worker-host>:8081/metrics for one local worker)."
-            )
-            raise ValueError(msg)
+    if args.inference_queue_max_waiting_requests is not None and not args.use_inference_server:
+        msg = "--inference_queue_max_waiting_requests requires --use_inference_server."
+        raise ValueError(msg)
+    if args.inference_client_queue_gate and (
+        not args.inference_queue_metrics_url or args.inference_queue_max_waiting_requests is None
+    ):
+        msg = (
+            "--inference_client_queue_gate requires both --inference_queue_metrics_url and "
+            "--inference_queue_max_waiting_requests."
+        )
+        raise ValueError(msg)
 
     queue_backpressure = None
-    if args.inference_queue_max_waiting_requests is not None:
+    if args.inference_client_queue_gate:
         queue_backpressure = QueueBackpressureConfig(
             max_waiting_requests=args.inference_queue_max_waiting_requests,
             poll_interval_seconds=args.inference_queue_poll_interval_seconds,
@@ -855,6 +912,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
 
         from nemo_curator.core.client import RayClient
         from nemo_curator.core.serve import DynamoServerConfig, DynamoVLLMModelConfig, InferenceServer
+        from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig
 
         # Count GPUs without Ray (ray.available_resources() requires a running
         # cluster). torch.cuda honours CUDA_VISIBLE_DEVICES. Start the cluster
@@ -912,7 +970,26 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             install_runtime_dependencies=not args.reuse_current_dynamo_environment,
             num_replicas=args.inference_max_replicas,
         )
-        backend_cfg = DynamoServerConfig()
+        admission_cfg = None
+        if args.inference_queue_max_waiting_requests is not None:
+            admission_cfg = DynamoAdmissionConfig(
+                max_waiting_requests=args.inference_queue_max_waiting_requests,
+                max_concurrent_requests=args.inference_admission_max_concurrent_requests,
+                poll_interval_seconds=args.inference_queue_poll_interval_seconds,
+                stale_after_seconds=args.inference_queue_stale_after_seconds,
+                retry_after_seconds=args.inference_queue_retry_after_seconds,
+                metric_name=args.inference_queue_metric_name,
+                fail_open=not args.inference_queue_fail_closed,
+                metrics_urls=[args.inference_queue_metrics_url] if args.inference_queue_metrics_url else [],
+                queue_aggregation=args.inference_queue_aggregation,
+                reduce_factor=args.inference_aimd_reduce_factor,
+                additive_increase=args.inference_aimd_additive_increase,
+                success_window=args.inference_aimd_success_window,
+                cooldown_seconds=args.inference_aimd_cooldown_seconds,
+                ceiling_overshoot=args.inference_aimd_ceiling_overshoot,
+                rampup_seconds=args.inference_aimd_rampup_seconds,
+            )
+        backend_cfg = DynamoServerConfig(admission=admission_cfg)
 
         inference_server = InferenceServer(
             models=[model_cfg],
@@ -959,8 +1036,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         "max_model_len": args.max_model_len,
         "max_num_seqs": args.max_num_seqs,
         "max_output_tokens": args.max_output_tokens,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
         "gpu_memory_utilization": args.gpu_memory_utilization,
         "kv_cache_dtype": args.kv_cache_dtype,
         "num_workers_override": args.num_workers,
@@ -1029,6 +1104,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     else args.num_workers
                 ),
                 batch_size=args.batch_size,
+                **_sampling_for_stage(
+                    args,
+                    "recover_entities",
+                    default_temperature=0.0,
+                    default_top_p=1.0,
+                ),
                 **{
                     **remote_kwargs,
                     **(
@@ -1054,6 +1135,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 prompt_file=pnc_prompt,
                 text_key=pnc_input_key,
                 output_text_key=args.pnc_output_key,
+                **_sampling_for_stage(args, "pnc"),
                 **shared_model_kwargs,
             )
         )
@@ -1070,6 +1152,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=langid_text_key,
             output_text_key="llm_language_prediction",
             enable_validation=False,
+            **_sampling_for_stage(args, "language_id"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1093,6 +1176,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             output_text_key=args.tn_output_key,
             enable_validation=not args.disable_tn_validation,
             validation_mode="tn",
+            **_sampling_for_stage(args, "tn"),
             **shared_model_kwargs,
         )
         # TN runs serially (before the fused stage) so tn_raw is available to the downstream
@@ -1111,6 +1195,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             prompt_file=itn_prompt,
             text_key=itn_input_key,
             output_text_key=args.itn_output_key,
+            **_sampling_for_stage(args, "itn"),
             **shared_model_kwargs,
         )
         # Fuse only when reading pnc_text; tn_raw input runs post-fused.
@@ -1132,6 +1217,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 prompt_file=itn_prompt,
                 text_key=itn_input_key,
                 output_text_key=args.itn_output_key,
+                **_sampling_for_stage(args, "itn"),
                 **shared_model_kwargs,
             )
             # Same placement rule as the ITN block above.
@@ -1148,6 +1234,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=args.itn_output_key,
             output_text_key=args.itn_no_disfluencies_output_key,
             max_deletion_ratio=0.5,
+            **_sampling_for_stage(args, "itn_no_disfluencies"),
             **shared_model_kwargs,
         )
         # DisfluencyRemoval reads itn_raw from the fused stage — must follow it.
@@ -1164,6 +1251,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.captioning_output_key,
             enable_validation=False,
+            **_sampling_for_stage(args, "captioning"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1198,6 +1286,12 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 kv_cache_dtype=args.kv_cache_dtype,
                 num_workers_override=args.context_asr_num_workers if args.context_asr_num_workers is not None else args.num_workers,
                 batch_size=args.batch_size,
+                **_sampling_for_stage(
+                    args,
+                    "context_asr",
+                    default_temperature=0.1,
+                    default_top_p=0.95,
+                ),
                 **{
                     **remote_kwargs,
                     **({"max_concurrent_requests": args.context_asr_max_concurrent_requests}
@@ -1253,6 +1347,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.code_switching_output_key,
             enable_validation=False,
+            **_sampling_for_stage(args, "code_switching"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1268,6 +1363,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.speech_qa_output_key,
             enable_validation=False,
+            **_sampling_for_stage(args, "speech_qa"),
             **shared_model_kwargs,
         )
         if use_fusing:

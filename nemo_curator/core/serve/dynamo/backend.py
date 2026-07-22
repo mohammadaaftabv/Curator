@@ -30,18 +30,21 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlparse
 
 import ray
 from loguru import logger
 
 from nemo_curator.backends.utils import check_total_gpu_capacity
 from nemo_curator.core.serve.base import InferenceBackend
-from nemo_curator.core.serve.dynamo.config import DynamoServerConfig
+from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig, DynamoServerConfig
 from nemo_curator.core.serve.dynamo.constants import (
+    ADMISSION_ACTOR_LABEL,
     DEFAULT_ETCD_PORT,
     DEFAULT_NATS_PORT,
     ETCD_ACTOR_LABEL,
     FRONTEND_ACTOR_LABEL,
+    INFRA_ADMISSION_BUNDLE,
     INFRA_ETCD_BUNDLE,
     INFRA_FRONTEND_BUNDLE,
     INFRA_NATS_BUNDLE,
@@ -110,6 +113,7 @@ class DynamoBackend(InferenceBackend):
         self._nats_actor: ManagedSubprocess | None = None
         self._worker_actors: list[ManagedSubprocess] = []
         self._frontend_actor: ManagedSubprocess | None = None
+        self._admission_actor: ManagedSubprocess | None = None
         self._actor_name_prefix: str = ""
         self._pg_name_prefix: str = ""
 
@@ -183,18 +187,25 @@ class DynamoBackend(InferenceBackend):
     # Deployment
     # ------------------------------------------------------------------
 
-    def _deploy_and_healthcheck(self, server: InferenceServer, backend_cfg: DynamoServerConfig) -> None:
+    def _deploy_and_healthcheck(  # noqa: PLR0915
+        self, server: InferenceServer, backend_cfg: DynamoServerConfig
+    ) -> None:
         """Validate, create PGs, launch infra/workers/frontend, health-check."""
         self._validate_unique_model_names(self._models)
         topology = _get_gpu_topology()
         self._validate_gpu_requirements(self._models, topology=topology)
 
         infra_pg_name = f"{self._actor_name_prefix}_pg_infra"
-        self._infra_pg = build_infra_pg(name=infra_pg_name, num_bundles=INFRA_NUM_BUNDLES)
+        infra_num_bundles = INFRA_NUM_BUNDLES + int(backend_cfg.admission is not None)
+        self._infra_pg = build_infra_pg(name=infra_pg_name, num_bundles=infra_num_bundles)
         self._infra_ip = get_bundle_node_ip(self._infra_pg, INFRA_ETCD_BUNDLE)
         server._host = self._infra_ip
 
-        server.port = get_free_port_in_bundle(self._infra_pg, INFRA_FRONTEND_BUNDLE, server.port)
+        public_bundle = INFRA_ADMISSION_BUNDLE if backend_cfg.admission is not None else INFRA_FRONTEND_BUNDLE
+        server.port = get_free_port_in_bundle(self._infra_pg, public_bundle, server.port)
+        frontend_port = server.port
+        if backend_cfg.admission is not None:
+            frontend_port = get_free_port_in_bundle(self._infra_pg, INFRA_FRONTEND_BUNDLE, server.port + 1)
 
         if backend_cfg.etcd_endpoint:
             etcd_endpoint = backend_cfg.etcd_endpoint
@@ -211,18 +222,12 @@ class DynamoBackend(InferenceBackend):
             nats_url = f"nats://{self._infra_ip}:{nats_port}"
 
         base_env = {"ETCD_ENDPOINTS": etcd_endpoint, "NATS_SERVER": nats_url}
-
-        # The Dynamo frontend and vLLM worker both start a system-status
-        # server. Workers intentionally retain DYN_SYSTEM_PORT (8081 by
-        # default) because that endpoint exports vLLM queue metrics. Give the
-        # frontend a separate free port so it cannot steal the worker metrics
-        # endpoint before the model process starts.
-        worker_system_port = int(os.environ.get("DYN_SYSTEM_PORT", "8081"))
-        frontend_system_port = get_free_port_in_bundle(
-            self._infra_pg,
-            INFRA_FRONTEND_BUNDLE,
-            worker_system_port + 1,
-        )
+        if backend_cfg.admission is not None and len(backend_cfg.admission.metrics_urls) == 1:
+            explicit_metrics_port = urlparse(backend_cfg.admission.metrics_urls[0]).port
+            if explicit_metrics_port is not None:
+                # Preserve the original PR contract for its single-worker
+                # explicit metrics URL. Other workers still get unique ports.
+                base_env["DYN_SYSTEM_PORT"] = str(explicit_metrics_port)
 
         effective_router_mode, effective_router_kv_events = self._resolve_effective_router(
             self._models, backend_cfg.router
@@ -275,21 +280,36 @@ class DynamoBackend(InferenceBackend):
             "etcd": etcd_endpoint,
             "nats": nats_url,
             "port": server.port,
+            "frontend_port": frontend_port,
             "placements": placements,
         }
         self._write_manifest(manifest_data, ready=False)
 
         self._frontend_actor = self._launch_frontend(
-            server.port,
+            frontend_port,
             base_env,
             backend_cfg=backend_cfg,
-            system_port=frontend_system_port,
             effective_router_mode=effective_router_mode,
             effective_router_kv_events=effective_router_kv_events,
             runtime_env=merge_model_runtime_envs(self._models),
         )
 
-        self._wait_for_models(server, expected_models)
+        frontend_endpoint = f"http://{self._infra_ip}:{frontend_port}/v1"
+        self._wait_for_models(server, expected_models, endpoint=frontend_endpoint)
+        if backend_cfg.admission is not None:
+            metrics_urls = backend_cfg.admission.metrics_urls or [
+                url for placement in placements for url in placement.get("metrics_urls", [])
+            ]
+            if not metrics_urls:
+                msg = "Dynamo admission requires at least one vLLM worker metrics URL."
+                raise ValueError(msg)
+            self._admission_actor = self._launch_admission_proxy(
+                port=server.port,
+                upstream=frontend_endpoint.removesuffix("/v1"),
+                metrics_urls=metrics_urls,
+                config=backend_cfg.admission,
+            )
+            self._wait_for_models(server, expected_models)
         self._write_manifest(manifest_data, ready=True)
 
     # ------------------------------------------------------------------
@@ -461,7 +481,6 @@ class DynamoBackend(InferenceBackend):
         base_env: dict[str, str],
         *,
         backend_cfg: DynamoServerConfig,
-        system_port: int | None = None,
         effective_router_mode: str | None = None,
         effective_router_kv_events: bool | None = None,
         runtime_env: dict[str, Any] | None = None,
@@ -479,8 +498,6 @@ class DynamoBackend(InferenceBackend):
         ``None`` the corresponding typed ``router`` field is used verbatim.
         """
         frontend_env = dict(base_env)
-        if system_port is not None:
-            frontend_env["DYN_SYSTEM_PORT"] = str(system_port)
         router = backend_cfg.router
         router_mode = effective_router_mode if effective_router_mode is not None else router.mode
         router_kv_events = effective_router_kv_events if effective_router_kv_events is not None else router.kv_events
@@ -522,13 +539,85 @@ class DynamoBackend(InferenceBackend):
             runtime_env=runtime_env,
         )
 
+    def _launch_admission_proxy(
+        self,
+        *,
+        port: int,
+        upstream: str,
+        metrics_urls: list[str],
+        config: DynamoAdmissionConfig,
+    ) -> ManagedSubprocess:
+        """Launch Curator's model-level 429/AIMD gateway in front of Dynamo."""
+        python_args = [
+            "-m",
+            "nemo_curator.core.serve.dynamo.admission_proxy",
+            "--port",
+            str(port),
+            "--upstream",
+            upstream,
+            "--metric-name",
+            config.metric_name,
+            "--max-waiting-requests",
+            str(config.max_waiting_requests),
+            "--max-concurrent-requests",
+            str(config.max_concurrent_requests),
+            "--queue-aggregation",
+            config.queue_aggregation,
+            "--poll-interval-seconds",
+            str(config.poll_interval_seconds),
+            "--stale-after-seconds",
+            str(config.stale_after_seconds),
+            "--aimd-reduce-factor",
+            str(config.reduce_factor),
+            "--aimd-additive-increase",
+            str(config.additive_increase),
+            "--aimd-success-window",
+            str(config.success_window),
+            "--aimd-cooldown-seconds",
+            str(config.cooldown_seconds),
+            "--aimd-ceiling-overshoot",
+            str(config.ceiling_overshoot),
+            "--aimd-rampup-seconds",
+            str(config.rampup_seconds),
+            "--fail-open" if config.fail_open else "--no-fail-open",
+        ]
+        if config.retry_after_seconds is not None:
+            python_args += ["--retry-after-seconds", str(config.retry_after_seconds)]
+        for metrics_url in metrics_urls:
+            python_args += ["--metrics-url", metrics_url]
+
+        logger.info(
+            "Starting Dynamo admission gateway on port %d -> %s (queue>%d, AIMD max=%d)",
+            port,
+            upstream,
+            config.max_waiting_requests,
+            config.max_concurrent_requests,
+        )
+        proc = ManagedSubprocess.spawn(
+            ADMISSION_ACTOR_LABEL,
+            self._infra_pg,
+            INFRA_ADMISSION_BUNDLE,
+            num_gpus=0,
+            python_args=python_args,
+            runtime_dir=self._runtime_dir,
+            actor_name_prefix=self._actor_name_prefix,
+        )
+        _wait_for_port(self._infra_ip, port, timeout_s=30, label="admission gateway")
+        return proc
+
     # ------------------------------------------------------------------
     # Health
     # ------------------------------------------------------------------
 
-    def _wait_for_models(self, server: InferenceServer, expected_models: set[str]) -> None:
+    def _wait_for_models(
+        self,
+        server: InferenceServer,
+        expected_models: set[str],
+        *,
+        endpoint: str | None = None,
+    ) -> None:
         """Poll ``/v1/models`` until all *expected_models* appear."""
-        models_url = f"{server.endpoint}/models"
+        models_url = f"{endpoint or server.endpoint}/models"
         deadline = time.monotonic() + server.health_check_timeout_s
         start_time = time.monotonic()
         attempt = 0
@@ -582,6 +671,8 @@ class DynamoBackend(InferenceBackend):
         procs: list[ManagedSubprocess] = []
         if self._frontend_actor is not None:
             procs.append(self._frontend_actor)
+        if self._admission_actor is not None:
+            procs.append(self._admission_actor)
         procs.extend(self._worker_actors)
         if self._etcd_actor is not None:
             procs.append(self._etcd_actor)
@@ -632,6 +723,7 @@ class DynamoBackend(InferenceBackend):
         ManagedSubprocess.stop_many(refreshed)
 
         self._frontend_actor = None
+        self._admission_actor = None
         self._worker_actors.clear()
         self._etcd_actor = None
         self._nats_actor = None

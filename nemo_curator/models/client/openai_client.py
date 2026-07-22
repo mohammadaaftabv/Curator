@@ -30,9 +30,11 @@ _MIN_PROMETHEUS_SAMPLE_FIELDS = 2
 class QueueBackpressureConfig:
     """Client-side admission control driven by a Prometheus queue metric.
 
-    This mirrors the queue gate used by the optimized Gemma serving recipe:
-    requests pause while the server reports too many waiting requests. Metrics
-    reads are cached briefly so a large client pool does not hammer ``/metrics``.
+    This is an optional proactive gate: requests pause while the server reports
+    too many waiting requests. It is distinct from Dynamo's model-level
+    admission proxy, which emits HTTP 429 and owns the shared AIMD state.
+    Metrics reads are cached briefly so a large client pool does not hammer
+    ``/metrics``.
     """
 
     max_waiting_requests: int

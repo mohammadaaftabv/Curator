@@ -231,6 +231,7 @@ class TestLaunchDisaggReplicas:
         test can assert uniqueness directly."""
         with (
             mock.patch.object(dynamo_vllm, "build_replica_pg", return_value=object()),
+            mock.patch.object(dynamo_vllm, "get_bundle_node_ip", return_value="10.0.0.5"),
             mock.patch.object(
                 dynamo_vllm,
                 "get_free_port_in_bundle",
