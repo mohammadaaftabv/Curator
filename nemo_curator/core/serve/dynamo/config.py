@@ -98,7 +98,7 @@ class DynamoAdmissionConfig:
 
     def __post_init__(self) -> None:
         checks = [
-            (self.max_waiting_requests < 1, "max_waiting_requests must be >= 1"),
+            (self.max_waiting_requests < 0, "max_waiting_requests must be >= 0"),
             (self.max_concurrent_requests < 1, "max_concurrent_requests must be >= 1"),
             (self.poll_interval_seconds <= 0, "poll_interval_seconds must be > 0"),
             (self.stale_after_seconds < 0, "stale_after_seconds must be >= 0"),

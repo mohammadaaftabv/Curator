@@ -714,7 +714,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         "--inference_queue_retry_after_seconds",
         type=float,
         default=None,
-        help="Optional fixed delay while backpressured; defaults to the polling interval.",
+        help="Optional Retry-After delay for queue 429s; defaults to the AIMD cooldown (2 seconds).",
     )
     srv.add_argument(
         "--inference_queue_metric_name",

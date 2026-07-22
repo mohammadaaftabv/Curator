@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import time
+from types import SimpleNamespace
+
 import pytest
 
-from nemo_curator.core.serve.dynamo.admission_proxy import AIMDState, QueueMetricSampler, _parse_retry_after
+from nemo_curator.core.serve.dynamo.admission_proxy import (
+    AdmissionProxy,
+    AIMDState,
+    QueueMetricSampler,
+    _is_exempt_path,
+    _parse_retry_after,
+    _parser,
+)
 from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig
 
 
@@ -19,6 +30,10 @@ def test_admission_config_matches_optimized_workflow_defaults() -> None:
     assert config.ceiling_overshoot == 0.10
 
 
+def test_admission_config_allows_zero_queue_threshold() -> None:
+    assert DynamoAdmissionConfig(max_waiting_requests=0).max_waiting_requests == 0
+
+
 @pytest.mark.asyncio
 async def test_aimd_reduces_once_per_429_cascade_and_recovers_additively() -> None:
     aimd = AIMDState(maximum=100, success_window=2)
@@ -26,13 +41,18 @@ async def test_aimd_reduces_once_per_429_cascade_and_recovers_additively() -> No
     await aimd.rate_limited(2.0, release_permit=False)
     assert aimd.current_limit == 75
     assert aimd.rate_limit_ceiling == 100
+    assert aimd.rate_limit_events_total == 1
+    assert aimd.multiplicative_decreases_total == 1
 
     await aimd.rate_limited(2.0, release_permit=False)
     assert aimd.current_limit == 75
+    assert aimd.rate_limit_events_total == 2
+    assert aimd.multiplicative_decreases_total == 1
 
     await aimd.release_success()
     await aimd.release_success()
     assert aimd.current_limit == 76
+    assert aimd.additive_increases_total == 1
 
 
 @pytest.mark.asyncio
@@ -56,6 +76,56 @@ def test_metric_sampler_marks_stale_or_missing_sample_unavailable() -> None:
         aggregation="min",
     )
     assert sampler.snapshot() == (None, False)
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/health", "/health/ready", "/v1/models", "/v1/models/gemma", "/is_scaling_elastic_ep/status"],
+)
+def test_control_path_prefixes_are_exempt(path: str) -> None:
+    assert _is_exempt_path(path)
+
+
+def test_chat_completions_is_not_exempt() -> None:
+    assert not _is_exempt_path("/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_overloaded_request_returns_openai_429_and_updates_telemetry() -> None:
+    args = _parser().parse_args(
+        [
+            "--port",
+            "8000",
+            "--upstream",
+            "http://dynamo:8001",
+            "--metrics-url",
+            "http://worker:18081/metrics",
+            "--max-waiting-requests",
+            "0",
+            "--max-concurrent-requests",
+            "100",
+        ]
+    )
+    proxy = AdmissionProxy(args)
+    proxy.sampler.value = 1
+    proxy.sampler.sampled_at = time.monotonic()
+
+    response = await proxy.handle(SimpleNamespace(path="/v1/chat/completions"))
+
+    assert response.status == 429
+    assert response.headers["Retry-After"] == "2.0"
+    assert response.headers["X-Curator-Queue-Depth"] == "1"
+    assert response.headers["X-Curator-AIMD-Limit"] == "75"
+    body = json.loads(response.text)
+    assert body["error"]["queue_depth"] == 1
+    assert body["error"]["max_waiting_requests"] == 0
+    assert proxy.queue_rejections_total == 1
+    assert proxy.aimd.rate_limit_events_total == 1
+    assert proxy.aimd.multiplicative_decreases_total == 1
+
+    metrics = proxy._proxy_metrics().text
+    assert "curator_admission_queue_rejections_total 1" in metrics
+    assert "curator_admission_multiplicative_decreases_total 1" in metrics
 
 
 @pytest.mark.parametrize(("value", "expected"), [("2", 2.0), ("0.25", 0.25), (None, None), ("date", None)])

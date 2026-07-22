@@ -47,7 +47,15 @@ _HOP_BY_HOP_HEADERS = frozenset(
         "upgrade",
     }
 )
-_EXEMPT_PATHS = frozenset({"/health", "/ready", "/metrics", "/version", "/v1/models", "/ping"})
+_EXEMPT_PATH_PREFIXES = (
+    "/health",
+    "/ready",
+    "/metrics",
+    "/version",
+    "/v1/models",
+    "/ping",
+    "/is_scaling_elastic_ep",
+)
 
 
 @dataclass
@@ -69,6 +77,9 @@ class AIMDState:
         self.success_streak = 0
         self.rate_limit_ceiling = 0
         self.consecutive_429s = 0
+        self.rate_limit_events_total = 0
+        self.multiplicative_decreases_total = 0
+        self.additive_increases_total = 0
         self.rampup_started_at = time.monotonic()
         self.rampup_active = self.rampup_seconds > 0 and self.maximum > 1
         self._condition = asyncio.Condition()
@@ -116,10 +127,13 @@ class AIMDState:
             else:
                 self.success_streak += 1
                 if self.success_streak >= self.success_window:
+                    previous = self.current_limit
                     self.current_limit = min(
                         self.current_limit + self.additive_increase,
                         self._soft_ceiling(),
                     )
+                    if self.current_limit > previous:
+                        self.additive_increases_total += 1
                     self.success_streak = 0
             self._condition.notify_all()
 
@@ -138,10 +152,13 @@ class AIMDState:
             previous = self.current_limit
             first_in_cascade = self.consecutive_429s == 0
             self.consecutive_429s += 1
+            self.rate_limit_events_total += 1
             self.blocked_until = time.monotonic() + (retry_after or self.cooldown_seconds)
             self.success_streak = 0
             if first_in_cascade:
                 self.current_limit = max(1, math.floor(previous * self.reduce_factor))
+                if self.current_limit < previous:
+                    self.multiplicative_decreases_total += 1
                 if self.rate_limit_ceiling == 0:
                     self.rate_limit_ceiling = previous
                 else:
@@ -230,9 +247,15 @@ class AdmissionProxy:
             ceiling_overshoot=args.aimd_ceiling_overshoot,
             rampup_seconds=args.aimd_rampup_seconds,
         )
+        self.forwarded_requests_total = 0
+        self.queue_rejections_total = 0
+        self.upstream_429_total = 0
+        self.upstream_failures_total = 0
 
     async def start(self, _app: web.Application) -> None:
-        self.session = ClientSession(timeout=ClientTimeout(total=None))
+        # Preserve upstream bytes and Content-Encoding/Content-Length headers
+        # exactly while streaming through the gateway.
+        self.session = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         self.sampler.start(self.session)
 
     async def close(self, _app: web.Application) -> None:
@@ -247,13 +270,14 @@ class AdmissionProxy:
         if request.path == "/metrics":
             return self._proxy_metrics()
 
-        is_exempt = request.path in _EXEMPT_PATHS
+        is_exempt = _is_exempt_path(request.path)
         queue_depth, fresh = self.sampler.snapshot()
         if not is_exempt and (
             (fresh and queue_depth > self.args.max_waiting_requests) or (not fresh and not self.args.fail_open)
         ):
             retry_after = self._retry_after()
             await self.aimd.rate_limited(retry_after, release_permit=False)
+            self.queue_rejections_total += 1
             return self._overloaded(queue_depth, retry_after, metrics_fresh=fresh)
 
         permit_acquired = False
@@ -267,6 +291,7 @@ class AdmissionProxy:
             k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS and k.lower() != "host"
         }
         try:
+            self.forwarded_requests_total += 1
             async with self.session.request(
                 request.method,
                 upstream_url,
@@ -283,14 +308,17 @@ class AdmissionProxy:
 
                 if permit_acquired:
                     if upstream.status == http.HTTPStatus.TOO_MANY_REQUESTS:
+                        self.upstream_429_total += 1
                         retry = _parse_retry_after(upstream.headers.get("Retry-After"))
                         await self.aimd.rate_limited(retry, release_permit=True)
                     elif upstream.status < http.HTTPStatus.BAD_REQUEST:
                         await self.aimd.release_success()
                     else:
+                        self.upstream_failures_total += 1
                         await self.aimd.release_failure()
                 return response
         except Exception:
+            self.upstream_failures_total += 1
             if permit_acquired:
                 await self.aimd.release_failure()
             raise
@@ -301,6 +329,8 @@ class AdmissionProxy:
                 "message": "Dynamo admission queue is overloaded",
                 "type": "rate_limit_error",
                 "code": "queue_overloaded",
+                "queue_depth": queue_depth,
+                "max_waiting_requests": self.args.max_waiting_requests,
             }
         }
         return web.json_response(
@@ -323,6 +353,20 @@ class AdmissionProxy:
             f"curator_admission_in_flight {self.aimd.in_flight}",
             "# TYPE curator_admission_queue_metric_fresh gauge",
             f"curator_admission_queue_metric_fresh {int(fresh)}",
+            "# TYPE curator_admission_forwarded_requests_total counter",
+            f"curator_admission_forwarded_requests_total {self.forwarded_requests_total}",
+            "# TYPE curator_admission_queue_rejections_total counter",
+            f"curator_admission_queue_rejections_total {self.queue_rejections_total}",
+            "# TYPE curator_admission_upstream_429_total counter",
+            f"curator_admission_upstream_429_total {self.upstream_429_total}",
+            "# TYPE curator_admission_upstream_failures_total counter",
+            f"curator_admission_upstream_failures_total {self.upstream_failures_total}",
+            "# TYPE curator_admission_rate_limit_events_total counter",
+            f"curator_admission_rate_limit_events_total {self.aimd.rate_limit_events_total}",
+            "# TYPE curator_admission_multiplicative_decreases_total counter",
+            f"curator_admission_multiplicative_decreases_total {self.aimd.multiplicative_decreases_total}",
+            "# TYPE curator_admission_additive_increases_total counter",
+            f"curator_admission_additive_increases_total {self.aimd.additive_increases_total}",
         ]
         if queue_depth is not None:
             lines += [
@@ -339,6 +383,11 @@ def _parse_retry_after(value: str | None) -> float | None:
         parsed = float(value)
         return parsed if parsed > 0 else None
     return None
+
+
+def _is_exempt_path(path: str) -> bool:
+    """Match the health/control path prefixes exempted by vLLM middleware."""
+    return any(path.startswith(prefix) for prefix in _EXEMPT_PATH_PREFIXES)
 
 
 def _parser() -> argparse.ArgumentParser:
