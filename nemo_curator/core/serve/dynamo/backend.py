@@ -587,7 +587,7 @@ class DynamoBackend(InferenceBackend):
             python_args += ["--metrics-url", metrics_url]
 
         logger.info(
-            "Starting Dynamo admission gateway on port %d -> %s (queue>%d, AIMD max=%d)",
+            "Starting Dynamo admission gateway on port {} -> {} (queue>{}, AIMD max={})",
             port,
             upstream,
             config.max_waiting_requests,
