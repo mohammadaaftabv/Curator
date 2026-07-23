@@ -36,7 +36,10 @@ def test_importing_asr_subpackage_does_not_load_concrete_adapters(monkeypatch: p
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        if name == "nemo_curator.models.asr.qwen_omni":
+        if name in {
+            "nemo_curator.models.asr.nemo_asr",
+            "nemo_curator.models.asr.qwen_omni",
+        }:
             blocked.append(name)
             msg = f"blocked eager import of {name}"
             raise ImportError(msg)
@@ -47,6 +50,7 @@ def test_importing_asr_subpackage_does_not_load_concrete_adapters(monkeypatch: p
     module_names = {
         "nemo_curator.models.asr",
         "nemo_curator.models.asr.base",
+        "nemo_curator.models.asr.nemo_asr",
         "nemo_curator.models.asr.qwen_omni",
     }
     saved_modules = {name: sys.modules.get(name) for name in module_names}
@@ -59,6 +63,7 @@ def test_importing_asr_subpackage_does_not_load_concrete_adapters(monkeypatch: p
         assert blocked == []
         assert asr_pkg.ASRAdapter is not None
         assert asr_pkg.ASRResult is not None
+        assert "NeMoASRAdapter" in asr_pkg._LAZY
         assert "QwenOmniASRAdapter" in asr_pkg._LAZY
     finally:
         for mod_name in module_names:
@@ -72,3 +77,9 @@ def test_asr_subpackage_lazy_getattr_resolves_qwen_adapter() -> None:
     from nemo_curator.models.asr import QwenOmniASRAdapter
 
     assert QwenOmniASRAdapter.__name__ == "QwenOmniASRAdapter"
+
+
+def test_asr_subpackage_lazy_getattr_resolves_nemo_adapter() -> None:
+    from nemo_curator.models.asr import NeMoASRAdapter
+
+    assert NeMoASRAdapter.__name__ == "NeMoASRAdapter"

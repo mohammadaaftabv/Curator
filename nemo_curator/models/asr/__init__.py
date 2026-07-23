@@ -17,10 +17,11 @@
 from nemo_curator.models.asr.base import ASRAdapter, ASRResult
 
 _LAZY: dict[str, str] = {
+    "NeMoASRAdapter": ".nemo_asr",
     "QwenOmniASRAdapter": ".qwen_omni",
 }
 
-__all__ = ["ASRAdapter", "ASRResult", "QwenOmniASRAdapter"]
+__all__ = ["ASRAdapter", "ASRResult", "NeMoASRAdapter", "QwenOmniASRAdapter"]
 
 
 def __getattr__(name: str) -> object:

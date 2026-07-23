@@ -22,12 +22,14 @@ predictions. The concrete adapter is resolved at runtime from
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Real
 from typing import TYPE_CHECKING, Any
 
 import hydra.utils
 from loguru import logger
 
 from nemo_curator.models.asr.base import ASRAdapter, ASRResult
+from nemo_curator.stages.audio.inference.batch_policy import BatchPolicy, run_bucketed
 from nemo_curator.stages.base import ProcessingStage
 from nemo_curator.stages.resources import Resources
 from nemo_curator.tasks import AudioTask
@@ -128,6 +130,7 @@ class ASRStage(ProcessingStage[AudioTask, AudioTask]):
     prefetch_fail_on_error: bool = True
 
     adapter_kwargs: dict[str, Any] = field(default_factory=dict)
+    batch_policy: BatchPolicy | None = None
 
     resources: Resources = field(default_factory=lambda: Resources(gpus=1.0))
     batch_size: int = 32
@@ -250,9 +253,38 @@ class ASRStage(ProcessingStage[AudioTask, AudioTask]):
                     "language_code": self._resolve_language_code(task),
                     "reference_text": self._resolve_reference_text(task),
                     "task_id": task.task_id,
+                    "audio_seconds": self._audio_seconds(waveform, sample_rate),
                 }
             )
         return items
+
+    @staticmethod
+    def _audio_seconds(waveform: object, sample_rate: object) -> float:
+        try:
+            rate = int(sample_rate)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
+        if rate <= 0 or waveform is None:
+            return 0.0
+
+        shape = getattr(waveform, "shape", None)
+        try:
+            samples = int(shape[-1]) if shape is not None and len(shape) > 0 else len(waveform)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, float(samples) / float(rate))
+
+    def item_cost(self, item: dict[str, Any]) -> float:
+        """Return the adapter estimate when available, otherwise duration."""
+        estimator = getattr(self._adapter, "estimate_item_cost", None)
+        if callable(estimator):
+            try:
+                estimated = estimator(item)
+                if isinstance(estimated, Real):
+                    return max(0.0, float(estimated))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("ASR adapter cost estimator failed; falling back to duration: {}", exc)
+        return max(0.0, float(item.get("audio_seconds", 0.0)))
 
     def process(self, task: AudioTask) -> AudioTask:
         msg = f"{type(self).__name__} only supports process_batch"
@@ -272,7 +304,12 @@ class ASRStage(ProcessingStage[AudioTask, AudioTask]):
 
         items = self._build_items(tasks_to_process)
 
-        results = self.run_inference(items)
+        results = run_bucketed(
+            items,
+            self.run_inference,
+            cost_fn=self.item_cost,
+            policy=self.batch_policy,
+        )
         if len(results) != len(items):
             msg = f"run_fn returned {len(results)} results for {len(items)} items (must match 1:1)"
             raise RuntimeError(msg)
