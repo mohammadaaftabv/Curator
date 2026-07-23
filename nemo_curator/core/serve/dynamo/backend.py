@@ -30,7 +30,6 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import urlparse
 
 import ray
 from loguru import logger
@@ -222,12 +221,6 @@ class DynamoBackend(InferenceBackend):
             nats_url = f"nats://{self._infra_ip}:{nats_port}"
 
         base_env = {"ETCD_ENDPOINTS": etcd_endpoint, "NATS_SERVER": nats_url}
-        if backend_cfg.admission is not None and len(backend_cfg.admission.metrics_urls) == 1:
-            explicit_metrics_port = urlparse(backend_cfg.admission.metrics_urls[0]).port
-            if explicit_metrics_port is not None:
-                # Preserve the original PR contract for its single-worker
-                # explicit metrics URL. Other workers still get unique ports.
-                base_env["DYN_SYSTEM_PORT"] = str(explicit_metrics_port)
 
         effective_router_mode, effective_router_kv_events = self._resolve_effective_router(
             self._models, backend_cfg.router
@@ -297,9 +290,7 @@ class DynamoBackend(InferenceBackend):
         frontend_endpoint = f"http://{self._infra_ip}:{frontend_port}/v1"
         self._wait_for_models(server, expected_models, endpoint=frontend_endpoint)
         if backend_cfg.admission is not None:
-            metrics_urls = backend_cfg.admission.metrics_urls or [
-                url for placement in placements for url in placement.get("metrics_urls", [])
-            ]
+            metrics_urls = [url for placement in placements for url in placement.get("metrics_urls", [])]
             if not metrics_urls:
                 msg = "Dynamo admission requires at least one vLLM worker metrics URL."
                 raise ValueError(msg)
@@ -561,8 +552,6 @@ class DynamoBackend(InferenceBackend):
             str(config.max_waiting_requests),
             "--max-concurrent-requests",
             str(config.max_concurrent_requests),
-            "--queue-aggregation",
-            config.queue_aggregation,
             "--poll-interval-seconds",
             str(config.poll_interval_seconds),
             "--stale-after-seconds",

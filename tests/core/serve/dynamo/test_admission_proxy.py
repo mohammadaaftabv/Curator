@@ -17,6 +17,7 @@ from nemo_curator.core.serve.dynamo.admission_proxy import (
     _is_exempt_path,
     _parse_retry_after,
     _parser,
+    _prometheus_metric_total,
 )
 from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig
 
@@ -34,6 +35,16 @@ def test_admission_config_matches_optimized_workflow_defaults() -> None:
 
 def test_admission_config_allows_zero_queue_threshold() -> None:
     assert DynamoAdmissionConfig(max_waiting_requests=0).max_waiting_requests == 0
+
+
+def test_prometheus_metric_total_sums_labelled_series() -> None:
+    payload = """
+    # HELP vllm:num_requests_waiting Number of requests waiting.
+    vllm:num_requests_waiting{model_name="gemma",replica="0"} 2
+    vllm:num_requests_waiting{model_name="gemma",replica="1"} 3
+    vllm:num_requests_running 9
+    """
+    assert _prometheus_metric_total(payload, "vllm:num_requests_waiting") == 5
 
 
 @pytest.mark.asyncio
@@ -75,7 +86,6 @@ def test_metric_sampler_marks_stale_or_missing_sample_unavailable() -> None:
         poll_interval=0.25,
         stale_after=2.0,
         fail_open=True,
-        aggregation="min",
     )
     assert sampler.snapshot() == (None, False)
 

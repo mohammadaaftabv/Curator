@@ -87,8 +87,6 @@ class DynamoAdmissionConfig:
     retry_after_seconds: float | None = None
     metric_name: str = "vllm:num_requests_waiting"
     fail_open: bool = True
-    metrics_urls: list[str] = field(default_factory=list)
-    queue_aggregation: Literal["min", "max", "sum"] = "min"
     reduce_factor: float = 0.75
     additive_increase: int = 1
     success_window: int = 25
@@ -107,7 +105,6 @@ class DynamoAdmissionConfig:
                 "retry_after_seconds must be > 0 when set",
             ),
             (not self.metric_name.strip(), "metric_name must not be empty"),
-            (self.queue_aggregation not in {"min", "max", "sum"}, "queue_aggregation must be min, max, or sum"),
             (not 0 < self.reduce_factor < 1, "reduce_factor must be in (0, 1)"),
             (self.additive_increase < 1, "additive_increase must be >= 1"),
             (self.success_window < 1, "success_window must be >= 1"),

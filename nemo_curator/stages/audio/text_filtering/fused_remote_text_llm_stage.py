@@ -44,7 +44,6 @@ from nemo_curator.stages.resources import Resources
 
 if TYPE_CHECKING:
     from nemo_curator.backends.base import WorkerMetadata
-    from nemo_curator.models.client.openai_client import QueueBackpressureConfig
     from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
     from nemo_curator.tasks import AudioTask
 
@@ -80,7 +79,6 @@ class FusedRemoteTextLLMStage(ProcessingStage["AudioTask", "AudioTask"]):
     served_model_name: str | None = None
     max_concurrent_requests: int = 64
     request_timeout: int = 120
-    queue_backpressure: QueueBackpressureConfig | None = None
 
     name: str = "FusedRemoteTextLLM"
     resources: Resources = field(default_factory=lambda: Resources(cpus=1.0))
@@ -116,7 +114,6 @@ class FusedRemoteTextLLMStage(ProcessingStage["AudioTask", "AudioTask"]):
             base_url=self.inference_base_url,
             api_key=self.inference_api_key,
             timeout=self.request_timeout,
-            queue_backpressure=self.queue_backpressure,
         )
         self._client.setup()
 

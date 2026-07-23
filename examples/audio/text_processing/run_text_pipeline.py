@@ -86,7 +86,6 @@ from pathlib import Path
 
 from loguru import logger
 
-from nemo_curator.models.client.openai_client import QueueBackpressureConfig
 from nemo_curator.pipeline import Pipeline
 from nemo_curator.stages.audio.alm.alm_manifest_reader import ALMManifestReader
 from nemo_curator.stages.audio.alm.sharded_manifest_writer import ShardedManifestWriterStage
@@ -723,32 +722,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="Prometheus metric used for queue backpressure.",
     )
     srv.add_argument(
-        "--inference_queue_aggregation",
-        choices=["min", "max", "sum"],
-        default="min",
-        help=(
-            "Aggregate queue depth across vLLM replicas. 'min' rejects only when every replica is overloaded, "
-            "matching retry-another-backend behavior (default)."
-        ),
-    )
-    srv.add_argument(
-        "--inference_queue_metrics_url",
-        type=str,
-        default=None,
-        help=(
-            "Optional explicit Prometheus endpoint exporting --inference_queue_metric_name. Local Dynamo "
-            "otherwise discovers the unique metrics endpoint assigned to each vLLM worker automatically."
-        ),
-    )
-    srv.add_argument(
-        "--inference_client_queue_gate",
-        action="store_true",
-        help=(
-            "Additionally retain the earlier proactive client-side metric gate. Requires "
-            "--inference_queue_metrics_url. Normally leave this off so server 429s drive shared AIMD."
-        ),
-    )
-    srv.add_argument(
         "--inference_queue_fail_closed",
         action="store_true",
         help="Fail requests when queue metrics are unavailable. Default is fail-open.",
@@ -876,26 +849,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     if args.inference_queue_max_waiting_requests is not None and not args.use_inference_server:
         msg = "--inference_queue_max_waiting_requests requires --use_inference_server."
         raise ValueError(msg)
-    if args.inference_client_queue_gate and (
-        not args.inference_queue_metrics_url or args.inference_queue_max_waiting_requests is None
-    ):
-        msg = (
-            "--inference_client_queue_gate requires both --inference_queue_metrics_url and "
-            "--inference_queue_max_waiting_requests."
-        )
-        raise ValueError(msg)
-
-    queue_backpressure = None
-    if args.inference_client_queue_gate:
-        queue_backpressure = QueueBackpressureConfig(
-            max_waiting_requests=args.inference_queue_max_waiting_requests,
-            poll_interval_seconds=args.inference_queue_poll_interval_seconds,
-            stale_after_seconds=args.inference_queue_stale_after_seconds,
-            retry_after_seconds=args.inference_queue_retry_after_seconds,
-            metric_name=args.inference_queue_metric_name,
-            fail_open=not args.inference_queue_fail_closed,
-            metrics_url=args.inference_queue_metrics_url,
-        )
 
     # ── Optional Dynamo inference server ─────────────────────────────
     # Two modes:
@@ -980,8 +933,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 retry_after_seconds=args.inference_queue_retry_after_seconds,
                 metric_name=args.inference_queue_metric_name,
                 fail_open=not args.inference_queue_fail_closed,
-                metrics_urls=[args.inference_queue_metrics_url] if args.inference_queue_metrics_url else [],
-                queue_aggregation=args.inference_queue_aggregation,
                 reduce_factor=args.inference_aimd_reduce_factor,
                 additive_increase=args.inference_aimd_additive_increase,
                 success_window=args.inference_aimd_success_window,
@@ -1011,7 +962,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             "inference_api_key": args.inference_api_key,
             "max_concurrent_requests": args.inference_max_concurrent_requests,
             "request_timeout": args.inference_request_timeout,
-            "queue_backpressure": queue_backpressure,
         }
         logger.info(f"Routing LLM stages to remote inference server at {remote_base_url} (model={remote_model_name})")
     # Pick in-process vs remote stage classes. The Remote* classes subclass
@@ -1382,7 +1332,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 served_model_name=remote_model_name,
                 max_concurrent_requests=args.inference_max_concurrent_requests,
                 request_timeout=args.inference_request_timeout,
-                queue_backpressure=queue_backpressure,
                 batch_size=args.batch_size,
             )
         )

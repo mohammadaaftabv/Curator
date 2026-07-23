@@ -32,9 +32,8 @@ from dataclasses import dataclass
 
 from aiohttp import ClientSession, ClientTimeout, web
 
-from nemo_curator.models.client.openai_client import _prometheus_metric_total
-
 _CAPACITY_POLL_INTERVAL = 0.05
+_MIN_PROMETHEUS_SAMPLE_FIELDS = 2
 _HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",
@@ -56,6 +55,29 @@ _EXEMPT_PATH_PREFIXES = (
     "/ping",
     "/is_scaling_elastic_ep",
 )
+
+
+def _prometheus_metric_total(payload: str, metric_name: str) -> float:
+    """Sum all labelled series for one metric, matching Big Iron's parser."""
+    values: list[float] = []
+    for raw_line in payload.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) < _MIN_PROMETHEUS_SAMPLE_FIELDS:
+            continue
+        series_name = fields[0].split("{", 1)[0]
+        if series_name != metric_name:
+            continue
+        try:
+            values.append(float(fields[1]))
+        except ValueError:
+            continue
+    if not values:
+        msg = f"Metric {metric_name!r} was not found in the Prometheus payload"
+        raise ValueError(msg)
+    return sum(values)
 
 
 @dataclass
@@ -167,7 +189,7 @@ class AIMDState:
 
 
 class QueueMetricSampler:
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         urls: list[str],
@@ -175,14 +197,12 @@ class QueueMetricSampler:
         poll_interval: float,
         stale_after: float,
         fail_open: bool,
-        aggregation: str = "min",
     ) -> None:
         self.urls = urls
         self.metric_name = metric_name
         self.poll_interval = poll_interval
         self.stale_after = stale_after
         self.fail_open = fail_open
-        self.aggregation = aggregation
         self.value: float | None = None
         self.sampled_at = 0.0
         self.last_error: str | None = None
@@ -205,16 +225,10 @@ class QueueMetricSampler:
                     async with session.get(url) as response:
                         response.raise_for_status()
                         values.append(_prometheus_metric_total(await response.text(), self.metric_name))
-                # A load balancer can retry another vLLM backend, so its client
-                # sees 429 only once all backends are saturated. Dynamo routes
-                # internally; min(queue) preserves that same semantics.
-                # max/sum remain available for deliberately stricter policies.
-                if self.aggregation == "sum":
-                    self.value = sum(values) if values else None
-                elif self.aggregation == "max":
-                    self.value = max(values) if values else None
-                else:
-                    self.value = min(values) if values else None
+                # The shared Dynamo frontend may route to any replica. Admit
+                # while at least one replica is below the queue threshold,
+                # equivalent to Big Iron trying another backend before 429.
+                self.value = min(values) if values else None
                 self.sampled_at = time.monotonic()
                 self.last_error = None
             except Exception as exc:  # noqa: BLE001
@@ -236,7 +250,6 @@ class AdmissionProxy:
             poll_interval=args.poll_interval_seconds,
             stale_after=args.stale_after_seconds,
             fail_open=args.fail_open,
-            aggregation=args.queue_aggregation,
         )
         self.aimd = AIMDState(
             maximum=args.max_concurrent_requests,
@@ -399,7 +412,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--metric-name", default="vllm:num_requests_waiting")
     parser.add_argument("--max-waiting-requests", type=int, required=True)
     parser.add_argument("--max-concurrent-requests", type=int, default=8192)
-    parser.add_argument("--queue-aggregation", choices=["min", "max", "sum"], default="min")
     parser.add_argument("--poll-interval-seconds", type=float, default=0.25)
     parser.add_argument("--stale-after-seconds", type=float, default=2.0)
     parser.add_argument("--retry-after-seconds", type=float, default=None)
