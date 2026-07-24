@@ -75,14 +75,13 @@ def test_dynamo_endpoint(namespace: str, component: str, role: str | None, expec
         (
             {
                 "speculative_config": {
-                    "method": "mtp",
                     "model": "google/gemma-4-31B-it-assistant",
                     "num_speculative_tokens": 4,
                 },
             },
             [
                 "--speculative-config",
-                '{"method": "mtp", "model": "google/gemma-4-31B-it-assistant", "num_speculative_tokens": 4}',
+                '{"model": "google/gemma-4-31B-it-assistant", "num_speculative_tokens": 4}',
             ],
         ),
     ],

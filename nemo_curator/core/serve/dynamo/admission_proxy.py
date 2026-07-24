@@ -12,13 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Queue-aware HTTP admission proxy for a Dynamo OpenAI frontend.
-
-This is the Dynamo-compatible equivalent of Big Iron's vLLM ASGI queue
-middleware plus Data Designer's AIMD throttle. Dynamo's frontend is a separate
-Rust-backed service and does not expose vLLM's ASGI middleware hook, so Curator
-runs this small gateway directly in front of it.
-"""
+"""HTTP 429 queue admission and shared AIMD control for Dynamo/vLLM."""
 
 from __future__ import annotations
 
@@ -32,6 +26,15 @@ from dataclasses import dataclass
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+_METRIC_NAME = "vllm:num_requests_waiting"
+_POLL_INTERVAL_SECONDS = 0.25
+_STALE_AFTER_SECONDS = 2.0
+_RETRY_AFTER_SECONDS = 2.0
+_REDUCE_FACTOR = 0.75
+_ADDITIVE_INCREASE = 1
+_SUCCESS_WINDOW = 25
+_CEILING_OVERSHOOT = 0.10
+_RAMPUP_SECONDS = 10.0
 _CAPACITY_POLL_INTERVAL = 0.05
 _MIN_PROMETHEUS_SAMPLE_FIELDS = 2
 _HOP_BY_HOP_HEADERS = frozenset(
@@ -57,40 +60,31 @@ _EXEMPT_PATH_PREFIXES = (
 )
 
 
-def _prometheus_metric_total(payload: str, metric_name: str) -> float:
-    """Sum all labelled series for one metric, matching Big Iron's parser."""
+def _prometheus_metric_total(payload: str, metric_name: str = _METRIC_NAME) -> float:
+    """Sum all labelled series for one Prometheus metric."""
     values: list[float] = []
     for raw_line in payload.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
         fields = line.split()
-        if len(fields) < _MIN_PROMETHEUS_SAMPLE_FIELDS:
+        if len(fields) < _MIN_PROMETHEUS_SAMPLE_FIELDS or fields[0].split("{", 1)[0] != metric_name:
             continue
-        series_name = fields[0].split("{", 1)[0]
-        if series_name != metric_name:
-            continue
-        try:
+        with contextlib.suppress(ValueError):
             values.append(float(fields[1]))
-        except ValueError:
-            continue
     if not values:
-        msg = f"Metric {metric_name!r} was not found in the Prometheus payload"
+        msg = f"Metric {metric_name!r} was not found"
         raise ValueError(msg)
     return sum(values)
 
 
 @dataclass
 class AIMDState:
-    """One model-wide AIMD window, matching Data Designer's chat domain."""
+    """Shared additive-increase/multiplicative-decrease concurrency window."""
 
     maximum: int
-    reduce_factor: float = 0.75
-    additive_increase: int = 1
-    success_window: int = 25
-    cooldown_seconds: float = 2.0
-    ceiling_overshoot: float = 0.10
-    rampup_seconds: float = 0.0
+    success_window: int = _SUCCESS_WINDOW
+    rampup_seconds: float = _RAMPUP_SECONDS
 
     def __post_init__(self) -> None:
         self.current_limit = 1 if self.rampup_seconds > 0 and self.maximum > 1 else self.maximum
@@ -120,7 +114,7 @@ class AIMDState:
     def _soft_ceiling(self) -> int:
         if self.rate_limit_ceiling <= 0:
             return self.maximum
-        overshoot = max(1, math.floor(self.rate_limit_ceiling * self.ceiling_overshoot))
+        overshoot = max(1, math.floor(self.rate_limit_ceiling * _CEILING_OVERSHOOT))
         return min(self.maximum, self.rate_limit_ceiling + overshoot)
 
     async def acquire(self) -> None:
@@ -128,16 +122,15 @@ class AIMDState:
             while True:
                 now = time.monotonic()
                 self._apply_ramp(now)
-                cooldown = self.blocked_until - now
-                if cooldown > 0:
+                if now < self.blocked_until:
                     with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(self._condition.wait(), timeout=cooldown)
-                    continue
-                if self.in_flight < self.current_limit:
+                        await asyncio.wait_for(self._condition.wait(), timeout=self.blocked_until - now)
+                elif self.in_flight < self.current_limit:
                     self.in_flight += 1
                     return
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._condition.wait(), timeout=_CAPACITY_POLL_INTERVAL)
+                else:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(self._condition.wait(), timeout=_CAPACITY_POLL_INTERVAL)
 
     async def release_success(self) -> None:
         async with self._condition:
@@ -151,11 +144,10 @@ class AIMDState:
                 if self.success_streak >= self.success_window:
                     previous = self.current_limit
                     self.current_limit = min(
-                        self.current_limit + self.additive_increase,
+                        self.current_limit + _ADDITIVE_INCREASE,
                         self._soft_ceiling(),
                     )
-                    if self.current_limit > previous:
-                        self.additive_increases_total += 1
+                    self.additive_increases_total += int(self.current_limit > previous)
                     self.success_streak = 0
             self._condition.notify_all()
 
@@ -166,7 +158,7 @@ class AIMDState:
                 self.consecutive_429s = 0
             self._condition.notify_all()
 
-    async def rate_limited(self, retry_after: float | None, *, release_permit: bool) -> None:
+    async def rate_limited(self, *, release_permit: bool) -> None:
         async with self._condition:
             if release_permit:
                 self.in_flight = max(0, self.in_flight - 1)
@@ -175,37 +167,24 @@ class AIMDState:
             first_in_cascade = self.consecutive_429s == 0
             self.consecutive_429s += 1
             self.rate_limit_events_total += 1
-            self.blocked_until = time.monotonic() + (retry_after or self.cooldown_seconds)
+            self.blocked_until = time.monotonic() + _RETRY_AFTER_SECONDS
             self.success_streak = 0
             if first_in_cascade:
-                self.current_limit = max(1, math.floor(previous * self.reduce_factor))
-                if self.current_limit < previous:
-                    self.multiplicative_decreases_total += 1
-                if self.rate_limit_ceiling == 0:
-                    self.rate_limit_ceiling = previous
-                else:
-                    self.rate_limit_ceiling = min(self.rate_limit_ceiling, previous)
+                self.current_limit = max(1, math.floor(previous * _REDUCE_FACTOR))
+                self.multiplicative_decreases_total += int(self.current_limit < previous)
+                self.rate_limit_ceiling = (
+                    previous if self.rate_limit_ceiling == 0 else min(self.rate_limit_ceiling, previous)
+                )
             self._condition.notify_all()
 
 
 class QueueMetricSampler:
-    def __init__(
-        self,
-        *,
-        urls: list[str],
-        metric_name: str,
-        poll_interval: float,
-        stale_after: float,
-        fail_open: bool,
-    ) -> None:
+    """Cache the least-loaded queue across automatically discovered workers."""
+
+    def __init__(self, urls: list[str]) -> None:
         self.urls = urls
-        self.metric_name = metric_name
-        self.poll_interval = poll_interval
-        self.stale_after = stale_after
-        self.fail_open = fail_open
         self.value: float | None = None
         self.sampled_at = 0.0
-        self.last_error: str | None = None
         self._task: asyncio.Task | None = None
 
     def start(self, session: ClientSession) -> None:
@@ -217,57 +196,45 @@ class QueueMetricSampler:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
 
+    @staticmethod
+    async def _read(session: ClientSession, url: str) -> float:
+        async with session.get(url) as response:
+            response.raise_for_status()
+            return _prometheus_metric_total(await response.text())
+
     async def _run(self, session: ClientSession) -> None:
         while True:
-            try:
-                values: list[float] = []
-                for url in self.urls:
-                    async with session.get(url) as response:
-                        response.raise_for_status()
-                        values.append(_prometheus_metric_total(await response.text(), self.metric_name))
-                # The shared Dynamo frontend may route to any replica. Admit
-                # while at least one replica is below the queue threshold,
-                # equivalent to Big Iron trying another backend before 429.
-                self.value = min(values) if values else None
+            results = await asyncio.gather(
+                *(self._read(session, url) for url in self.urls),
+                return_exceptions=True,
+            )
+            values = [value for value in results if isinstance(value, float)]
+            if values:
+                # Big Iron lets its load balancer retry a 429 on another vLLM
+                # backend. This centralized equivalent admits while any Dynamo
+                # worker still has queue capacity; the frontend then routes it.
+                self.value = min(values)
                 self.sampled_at = time.monotonic()
-                self.last_error = None
-            except Exception as exc:  # noqa: BLE001
-                self.last_error = str(exc)
-            await asyncio.sleep(self.poll_interval)
+            await asyncio.sleep(_POLL_INTERVAL_SECONDS)
 
     def snapshot(self) -> tuple[float | None, bool]:
-        fresh = self.value is not None and time.monotonic() - self.sampled_at <= self.stale_after
+        fresh = self.value is not None and time.monotonic() - self.sampled_at <= _STALE_AFTER_SECONDS
         return (self.value if fresh else None), fresh
 
 
 class AdmissionProxy:
+    """OpenAI-compatible gateway that combines queue 429s with shared AIMD."""
+
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.session: ClientSession | None = None
-        self.sampler = QueueMetricSampler(
-            urls=args.metrics_url,
-            metric_name=args.metric_name,
-            poll_interval=args.poll_interval_seconds,
-            stale_after=args.stale_after_seconds,
-            fail_open=args.fail_open,
-        )
-        self.aimd = AIMDState(
-            maximum=args.max_concurrent_requests,
-            reduce_factor=args.aimd_reduce_factor,
-            additive_increase=args.aimd_additive_increase,
-            success_window=args.aimd_success_window,
-            cooldown_seconds=args.aimd_cooldown_seconds,
-            ceiling_overshoot=args.aimd_ceiling_overshoot,
-            rampup_seconds=args.aimd_rampup_seconds,
-        )
+        self.sampler = QueueMetricSampler(args.metrics_url)
+        self.aimd = AIMDState(maximum=args.max_concurrent_requests)
         self.forwarded_requests_total = 0
         self.queue_rejections_total = 0
         self.upstream_429_total = 0
-        self.upstream_failures_total = 0
 
     async def start(self, _app: web.Application) -> None:
-        # Preserve upstream bytes and Content-Encoding/Content-Length headers
-        # exactly while streaming through the gateway.
         self.session = ClientSession(timeout=ClientTimeout(total=None), auto_decompress=False)
         self.sampler.start(self.session)
 
@@ -276,32 +243,44 @@ class AdmissionProxy:
         if self.session is not None:
             await self.session.close()
 
-    def _retry_after(self) -> float:
-        return self.args.retry_after_seconds or self.args.aimd_cooldown_seconds
-
     async def handle(self, request: web.Request) -> web.StreamResponse:
         if request.path == "/metrics":
-            return self._proxy_metrics()
+            return self._metrics()
 
-        is_exempt = _is_exempt_path(request.path)
+        exempt = any(request.path.startswith(prefix) for prefix in _EXEMPT_PATH_PREFIXES)
         queue_depth, fresh = self.sampler.snapshot()
-        if not is_exempt and (
-            (fresh and queue_depth > self.args.max_waiting_requests) or (not fresh and not self.args.fail_open)
-        ):
-            retry_after = self._retry_after()
-            await self.aimd.rate_limited(retry_after, release_permit=False)
+        if not exempt and fresh and queue_depth > self.args.max_waiting_requests:
+            await self.aimd.rate_limited(release_permit=False)
             self.queue_rejections_total += 1
-            return self._overloaded(queue_depth, retry_after, metrics_fresh=fresh)
+            return web.json_response(
+                {
+                    "error": {
+                        "message": "vLLM waiting queue exceeded the admission threshold",
+                        "type": "rate_limit_error",
+                        "code": "queue_overloaded",
+                        "queue_depth": queue_depth,
+                        "max_waiting_requests": self.args.max_waiting_requests,
+                    }
+                },
+                status=http.HTTPStatus.TOO_MANY_REQUESTS,
+                headers={
+                    "Retry-After": str(int(_RETRY_AFTER_SECONDS)),
+                    "X-Should-Retry": "true",
+                    "X-Curator-AIMD-Limit": str(self.aimd.current_limit),
+                },
+            )
 
         permit_acquired = False
-        if not is_exempt:
+        if not exempt:
             await self.aimd.acquire()
             permit_acquired = True
 
         assert self.session is not None  # noqa: S101
         upstream_url = f"{self.args.upstream.rstrip('/')}{request.rel_url}"
         headers = {
-            k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS and k.lower() != "host"
+            key: value
+            for key, value in request.headers.items()
+            if key.lower() not in _HOP_BY_HOP_HEADERS and key.lower() != "host"
         }
         try:
             self.forwarded_requests_total += 1
@@ -312,7 +291,9 @@ class AdmissionProxy:
                 data=request.content.iter_chunked(64 * 1024),
                 allow_redirects=False,
             ) as upstream:
-                response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in _HOP_BY_HOP_HEADERS}
+                response_headers = {
+                    key: value for key, value in upstream.headers.items() if key.lower() not in _HOP_BY_HOP_HEADERS
+                }
                 response = web.StreamResponse(status=upstream.status, headers=response_headers)
                 await response.prepare(request)
                 async for chunk in upstream.content.iter_chunked(64 * 1024):
@@ -322,85 +303,34 @@ class AdmissionProxy:
                 if permit_acquired:
                     if upstream.status == http.HTTPStatus.TOO_MANY_REQUESTS:
                         self.upstream_429_total += 1
-                        retry = _parse_retry_after(upstream.headers.get("Retry-After"))
-                        await self.aimd.rate_limited(retry, release_permit=True)
+                        await self.aimd.rate_limited(release_permit=True)
                     elif upstream.status < http.HTTPStatus.BAD_REQUEST:
                         await self.aimd.release_success()
                     else:
-                        self.upstream_failures_total += 1
                         await self.aimd.release_failure()
                 return response
         except Exception:
-            self.upstream_failures_total += 1
             if permit_acquired:
                 await self.aimd.release_failure()
             raise
 
-    def _overloaded(self, queue_depth: float | None, retry_after: float, *, metrics_fresh: bool) -> web.Response:
-        body = {
-            "error": {
-                "message": "Dynamo admission queue is overloaded",
-                "type": "rate_limit_error",
-                "code": "queue_overloaded",
-                "queue_depth": queue_depth,
-                "max_waiting_requests": self.args.max_waiting_requests,
-            }
-        }
-        return web.json_response(
-            body,
-            status=http.HTTPStatus.TOO_MANY_REQUESTS,
-            headers={
-                "Retry-After": str(retry_after),
-                "X-Curator-Queue-Depth": "unknown" if queue_depth is None else str(queue_depth),
-                "X-Curator-Queue-Metrics-Fresh": str(metrics_fresh).lower(),
-                "X-Curator-AIMD-Limit": str(self.aimd.current_limit),
-            },
-        )
-
-    def _proxy_metrics(self) -> web.Response:
+    def _metrics(self) -> web.Response:
         queue_depth, fresh = self.sampler.snapshot()
-        lines = [
-            "# TYPE curator_admission_current_limit gauge",
-            f"curator_admission_current_limit {self.aimd.current_limit}",
-            "# TYPE curator_admission_in_flight gauge",
-            f"curator_admission_in_flight {self.aimd.in_flight}",
-            "# TYPE curator_admission_queue_metric_fresh gauge",
-            f"curator_admission_queue_metric_fresh {int(fresh)}",
-            "# TYPE curator_admission_forwarded_requests_total counter",
-            f"curator_admission_forwarded_requests_total {self.forwarded_requests_total}",
-            "# TYPE curator_admission_queue_rejections_total counter",
-            f"curator_admission_queue_rejections_total {self.queue_rejections_total}",
-            "# TYPE curator_admission_upstream_429_total counter",
-            f"curator_admission_upstream_429_total {self.upstream_429_total}",
-            "# TYPE curator_admission_upstream_failures_total counter",
-            f"curator_admission_upstream_failures_total {self.upstream_failures_total}",
-            "# TYPE curator_admission_rate_limit_events_total counter",
-            f"curator_admission_rate_limit_events_total {self.aimd.rate_limit_events_total}",
-            "# TYPE curator_admission_multiplicative_decreases_total counter",
-            f"curator_admission_multiplicative_decreases_total {self.aimd.multiplicative_decreases_total}",
-            "# TYPE curator_admission_additive_increases_total counter",
-            f"curator_admission_additive_increases_total {self.aimd.additive_increases_total}",
-        ]
+        values = {
+            "current_limit": self.aimd.current_limit,
+            "in_flight": self.aimd.in_flight,
+            "queue_metric_fresh": int(fresh),
+            "forwarded_requests_total": self.forwarded_requests_total,
+            "queue_rejections_total": self.queue_rejections_total,
+            "upstream_429_total": self.upstream_429_total,
+            "rate_limit_events_total": self.aimd.rate_limit_events_total,
+            "multiplicative_decreases_total": self.aimd.multiplicative_decreases_total,
+            "additive_increases_total": self.aimd.additive_increases_total,
+        }
         if queue_depth is not None:
-            lines += [
-                "# TYPE curator_admission_worker_queue_depth gauge",
-                f"curator_admission_worker_queue_depth {queue_depth}",
-            ]
+            values["worker_queue_depth"] = queue_depth
+        lines = [f"curator_admission_{name} {value}" for name, value in values.items()]
         return web.Response(text="\n".join(lines) + "\n", content_type="text/plain")
-
-
-def _parse_retry_after(value: str | None) -> float | None:
-    if value is None:
-        return None
-    with contextlib.suppress(ValueError):
-        parsed = float(value)
-        return parsed if parsed > 0 else None
-    return None
-
-
-def _is_exempt_path(path: str) -> bool:
-    """Match the health/control path prefixes exempted by vLLM middleware."""
-    return any(path.startswith(prefix) for prefix in _EXEMPT_PATH_PREFIXES)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -409,19 +339,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--upstream", required=True)
     parser.add_argument("--metrics-url", action="append", required=True)
-    parser.add_argument("--metric-name", default="vllm:num_requests_waiting")
     parser.add_argument("--max-waiting-requests", type=int, required=True)
     parser.add_argument("--max-concurrent-requests", type=int, default=8192)
-    parser.add_argument("--poll-interval-seconds", type=float, default=0.25)
-    parser.add_argument("--stale-after-seconds", type=float, default=2.0)
-    parser.add_argument("--retry-after-seconds", type=float, default=None)
-    parser.add_argument("--fail-open", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--aimd-reduce-factor", type=float, default=0.75)
-    parser.add_argument("--aimd-additive-increase", type=int, default=1)
-    parser.add_argument("--aimd-success-window", type=int, default=25)
-    parser.add_argument("--aimd-cooldown-seconds", type=float, default=2.0)
-    parser.add_argument("--aimd-ceiling-overshoot", type=float, default=0.10)
-    parser.add_argument("--aimd-rampup-seconds", type=float, default=0.0)
     return parser
 
 

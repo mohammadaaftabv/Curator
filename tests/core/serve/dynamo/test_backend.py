@@ -196,6 +196,37 @@ class TestDynamoBackendStart:
 
         assert order == ["overrides", "actors", "pgs", "deploy"]
 
+    def test_preinstalled_environment_skips_actor_override_materialization(self) -> None:
+        server = InferenceServer(
+            models=[
+                DynamoVLLMModelConfig(
+                    model_identifier="m",
+                    install_runtime_dependencies=False,
+                )
+            ],
+            backend=DynamoServerConfig(
+                etcd_endpoint="http://127.0.0.1:2379",
+                nats_url="nats://127.0.0.1:4222",
+            ),
+        )
+        backend = DynamoBackend(server)
+        mock_ctx = mock.Mock()
+        mock_ctx.get_temp_dir.return_value = "/tmp"  # noqa: S108
+        mock_ctx.get_session_name.return_value = "session_test"
+
+        with (
+            mock.patch.object(dynamo_backend.ray, "init", return_value=contextlib.nullcontext()),
+            mock.patch.object(dynamo_backend.ray, "get_runtime_context", return_value=mock_ctx),
+            mock.patch.object(dynamo_backend.os, "makedirs"),
+            mock.patch.object(dynamo_backend, "ensure_actor_overrides_on_all_nodes") as ensure_overrides,
+            mock.patch.object(backend, "_sweep_orphan_actors"),
+            mock.patch.object(dynamo_backend, "remove_named_pgs_with_prefix"),
+            mock.patch.object(backend, "_deploy_and_healthcheck"),
+        ):
+            backend.start()
+
+        ensure_overrides.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Frontend CLI-arg wiring (router mode + router_kwargs translation)
@@ -273,12 +304,11 @@ class TestDynamoBackendLaunchFrontend:
         ]
         assert captured_spawn[0]["subprocess_env"] == {}
 
-    def test_admission_proxy_receives_queue_and_aimd_config(self, captured_spawn: list[dict[str, Any]]) -> None:
+    def test_admission_proxy_receives_discovered_metrics(self, captured_spawn: list[dict[str, Any]]) -> None:
         backend_cfg = DynamoServerConfig(
             admission=DynamoAdmissionConfig(
                 max_waiting_requests=2048,
                 max_concurrent_requests=8192,
-                retry_after_seconds=3.0,
             )
         )
         backend = self._make_backend(backend_cfg)
@@ -296,7 +326,6 @@ class TestDynamoBackendLaunchFrontend:
         assert args[args.index("--max-waiting-requests") + 1] == "2048"
         assert args[args.index("--max-concurrent-requests") + 1] == "8192"
         assert args[args.index("--metrics-url") + 1] == "http://10.0.0.2:18081/metrics"
-        assert args[args.index("--retry-after-seconds") + 1] == "3.0"
 
     def test_kv_mode_without_events_emits_no_router_kv_events(self, captured_spawn: list[dict[str, Any]]) -> None:
         backend_cfg = DynamoServerConfig(router=DynamoRouterConfig(mode="kv", kv_events=False))

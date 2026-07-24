@@ -202,9 +202,11 @@ class DynamoBackend(InferenceBackend):
 
         public_bundle = INFRA_ADMISSION_BUNDLE if backend_cfg.admission is not None else INFRA_FRONTEND_BUNDLE
         server.port = get_free_port_in_bundle(self._infra_pg, public_bundle, server.port)
-        frontend_port = server.port
-        if backend_cfg.admission is not None:
-            frontend_port = get_free_port_in_bundle(self._infra_pg, INFRA_FRONTEND_BUNDLE, server.port + 1)
+        frontend_port = (
+            get_free_port_in_bundle(self._infra_pg, INFRA_FRONTEND_BUNDLE, server.port + 1)
+            if backend_cfg.admission is not None
+            else server.port
+        )
 
         if backend_cfg.etcd_endpoint:
             etcd_endpoint = backend_cfg.etcd_endpoint
@@ -292,7 +294,7 @@ class DynamoBackend(InferenceBackend):
         if backend_cfg.admission is not None:
             metrics_urls = [url for placement in placements for url in placement.get("metrics_urls", [])]
             if not metrics_urls:
-                msg = "Dynamo admission requires at least one vLLM worker metrics URL."
+                msg = "Dynamo admission requires at least one vLLM worker metrics endpoint."
                 raise ValueError(msg)
             self._admission_actor = self._launch_admission_proxy(
                 port=server.port,
@@ -538,7 +540,7 @@ class DynamoBackend(InferenceBackend):
         metrics_urls: list[str],
         config: DynamoAdmissionConfig,
     ) -> ManagedSubprocess:
-        """Launch Curator's model-level 429/AIMD gateway in front of Dynamo."""
+        """Launch the model-wide 429/AIMD gateway in front of Dynamo."""
         python_args = [
             "-m",
             "nemo_curator.core.serve.dynamo.admission_proxy",
@@ -546,42 +548,14 @@ class DynamoBackend(InferenceBackend):
             str(port),
             "--upstream",
             upstream,
-            "--metric-name",
-            config.metric_name,
             "--max-waiting-requests",
             str(config.max_waiting_requests),
             "--max-concurrent-requests",
             str(config.max_concurrent_requests),
-            "--poll-interval-seconds",
-            str(config.poll_interval_seconds),
-            "--stale-after-seconds",
-            str(config.stale_after_seconds),
-            "--aimd-reduce-factor",
-            str(config.reduce_factor),
-            "--aimd-additive-increase",
-            str(config.additive_increase),
-            "--aimd-success-window",
-            str(config.success_window),
-            "--aimd-cooldown-seconds",
-            str(config.cooldown_seconds),
-            "--aimd-ceiling-overshoot",
-            str(config.ceiling_overshoot),
-            "--aimd-rampup-seconds",
-            str(config.rampup_seconds),
-            "--fail-open" if config.fail_open else "--no-fail-open",
         ]
-        if config.retry_after_seconds is not None:
-            python_args += ["--retry-after-seconds", str(config.retry_after_seconds)]
         for metrics_url in metrics_urls:
             python_args += ["--metrics-url", metrics_url]
 
-        logger.info(
-            "Starting Dynamo admission gateway on port {} -> {} (queue>{}, AIMD max={})",
-            port,
-            upstream,
-            config.max_waiting_requests,
-            config.max_concurrent_requests,
-        )
         proc = ManagedSubprocess.spawn(
             ADMISSION_ACTOR_LABEL,
             self._infra_pg,

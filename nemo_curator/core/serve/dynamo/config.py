@@ -72,49 +72,23 @@ class DynamoRouterConfig:
 
 @dataclass
 class DynamoAdmissionConfig:
-    """Model-level queue admission and AIMD control for the Dynamo frontend.
+    """Opt-in queue admission for a shared Dynamo/vLLM deployment.
 
-    The admission proxy reads the vLLM workers' Prometheus queue metric,
-    returns HTTP 429 when the queue is overloaded, and applies one shared AIMD
-    concurrency window in front of all Curator stage actors using the model.
-    Defaults match the optimized Data Designer workflow.
+    ``max_waiting_requests`` is the per-worker vLLM queue threshold that
+    triggers HTTP 429. ``max_concurrent_requests`` is the initial/hard ceiling
+    for the shared AIMD window.
     """
 
     max_waiting_requests: int
     max_concurrent_requests: int = 8192
-    poll_interval_seconds: float = 0.25
-    stale_after_seconds: float = 2.0
-    retry_after_seconds: float | None = None
-    metric_name: str = "vllm:num_requests_waiting"
-    fail_open: bool = True
-    reduce_factor: float = 0.75
-    additive_increase: int = 1
-    success_window: int = 25
-    cooldown_seconds: float = 2.0
-    ceiling_overshoot: float = 0.10
-    rampup_seconds: float = 0.0
 
     def __post_init__(self) -> None:
-        checks = [
-            (self.max_waiting_requests < 0, "max_waiting_requests must be >= 0"),
-            (self.max_concurrent_requests < 1, "max_concurrent_requests must be >= 1"),
-            (self.poll_interval_seconds <= 0, "poll_interval_seconds must be > 0"),
-            (self.stale_after_seconds < 0, "stale_after_seconds must be >= 0"),
-            (
-                self.retry_after_seconds is not None and self.retry_after_seconds <= 0,
-                "retry_after_seconds must be > 0 when set",
-            ),
-            (not self.metric_name.strip(), "metric_name must not be empty"),
-            (not 0 < self.reduce_factor < 1, "reduce_factor must be in (0, 1)"),
-            (self.additive_increase < 1, "additive_increase must be >= 1"),
-            (self.success_window < 1, "success_window must be >= 1"),
-            (self.cooldown_seconds <= 0, "cooldown_seconds must be > 0"),
-            (self.ceiling_overshoot < 0, "ceiling_overshoot must be >= 0"),
-            (self.rampup_seconds < 0, "rampup_seconds must be >= 0"),
-        ]
-        for invalid, message in checks:
-            if invalid:
-                raise ValueError(message)
+        if self.max_waiting_requests < 0:
+            msg = "max_waiting_requests must be >= 0"
+            raise ValueError(msg)
+        if self.max_concurrent_requests < 1:
+            msg = "max_concurrent_requests must be >= 1"
+            raise ValueError(msg)
 
 
 @dataclass

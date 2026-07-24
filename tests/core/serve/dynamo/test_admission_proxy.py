@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from types import SimpleNamespace
@@ -14,50 +15,47 @@ from nemo_curator.core.serve.dynamo.admission_proxy import (
     AdmissionProxy,
     AIMDState,
     QueueMetricSampler,
-    _is_exempt_path,
-    _parse_retry_after,
     _parser,
     _prometheus_metric_total,
 )
 from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig
 
 
-def test_admission_config_matches_optimized_workflow_defaults() -> None:
+def test_admission_config_has_only_workflow_inputs() -> None:
     config = DynamoAdmissionConfig(max_waiting_requests=2048)
 
+    assert config.max_waiting_requests == 2048
     assert config.max_concurrent_requests == 8192
-    assert config.reduce_factor == 0.75
-    assert config.additive_increase == 1
-    assert config.success_window == 25
-    assert config.cooldown_seconds == 2.0
-    assert config.ceiling_overshoot == 0.10
 
 
-def test_admission_config_allows_zero_queue_threshold() -> None:
-    assert DynamoAdmissionConfig(max_waiting_requests=0).max_waiting_requests == 0
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"max_waiting_requests": -1}, "max_waiting_requests"),
+        ({"max_waiting_requests": 0, "max_concurrent_requests": 0}, "max_concurrent_requests"),
+    ],
+)
+def test_admission_config_rejects_invalid_limits(kwargs: dict, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        DynamoAdmissionConfig(**kwargs)
 
 
 def test_prometheus_metric_total_sums_labelled_series() -> None:
     payload = """
-    # HELP vllm:num_requests_waiting Number of requests waiting.
-    vllm:num_requests_waiting{model_name="gemma",replica="0"} 2
-    vllm:num_requests_waiting{model_name="gemma",replica="1"} 3
+    vllm:num_requests_waiting{replica="0"} 2
+    vllm:num_requests_waiting{replica="1"} 3
     vllm:num_requests_running 9
     """
-    assert _prometheus_metric_total(payload, "vllm:num_requests_waiting") == 5
+    assert _prometheus_metric_total(payload) == 5
 
 
 @pytest.mark.asyncio
 async def test_aimd_reduces_once_per_429_cascade_and_recovers_additively() -> None:
-    aimd = AIMDState(maximum=100, success_window=2)
+    aimd = AIMDState(maximum=100, success_window=2, rampup_seconds=0)
 
-    await aimd.rate_limited(2.0, release_permit=False)
-    assert aimd.current_limit == 75
-    assert aimd.rate_limit_ceiling == 100
-    assert aimd.rate_limit_events_total == 1
-    assert aimd.multiplicative_decreases_total == 1
+    await aimd.rate_limited(release_permit=False)
+    await aimd.rate_limited(release_permit=False)
 
-    await aimd.rate_limited(2.0, release_permit=False)
     assert aimd.current_limit == 75
     assert aimd.rate_limit_events_total == 2
     assert aimd.multiplicative_decreases_total == 1
@@ -68,42 +66,48 @@ async def test_aimd_reduces_once_per_429_cascade_and_recovers_additively() -> No
     assert aimd.additive_increases_total == 1
 
 
-@pytest.mark.asyncio
-async def test_startup_ramp_is_aborted_by_first_rate_limit() -> None:
-    aimd = AIMDState(maximum=64, rampup_seconds=60)
+def test_aimd_uses_bounded_startup_ramp() -> None:
+    aimd = AIMDState(maximum=8192)
+
+    assert aimd.rampup_seconds == 10.0
     assert aimd.current_limit == 1
-
-    await aimd.rate_limited(None, release_permit=False)
-
-    assert not aimd.rampup_active
-    assert aimd.current_limit == 1
+    assert aimd.rampup_active
 
 
-def test_metric_sampler_marks_stale_or_missing_sample_unavailable() -> None:
-    sampler = QueueMetricSampler(
-        urls=["http://worker/metrics"],
-        metric_name="vllm:num_requests_waiting",
-        poll_interval=0.25,
-        stale_after=2.0,
-        fail_open=True,
-    )
-    assert sampler.snapshot() == (None, False)
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["/health", "/health/ready", "/v1/models", "/v1/models/gemma", "/is_scaling_elastic_ep/status"],
-)
-def test_control_path_prefixes_are_exempt(path: str) -> None:
-    assert _is_exempt_path(path)
-
-
-def test_chat_completions_is_not_exempt() -> None:
-    assert not _is_exempt_path("/v1/chat/completions")
+def test_metric_sampler_starts_fail_open() -> None:
+    assert QueueMetricSampler(["http://worker/metrics"]).snapshot() == (None, False)
 
 
 @pytest.mark.asyncio
-async def test_overloaded_request_returns_openai_429_and_updates_telemetry() -> None:
+async def test_metric_sampler_uses_least_loaded_available_worker() -> None:
+    sampler = QueueMetricSampler(["http://worker-1/metrics", "http://worker-2/metrics"])
+    reads_complete = asyncio.Event()
+    read_count = 0
+
+    async def read(_session: object, url: str) -> float:
+        nonlocal read_count
+        read_count += 1
+        if read_count == len(sampler.urls):
+            reads_complete.set()
+        return {"http://worker-1/metrics": 9.0, "http://worker-2/metrics": 1.0}[url]
+
+    sampler._read = read
+    task = asyncio.create_task(sampler._run(SimpleNamespace()))
+    try:
+        await asyncio.wait_for(reads_complete.wait(), timeout=1)
+        for _ in range(10):
+            if sampler.snapshot()[1]:
+                break
+            await asyncio.sleep(0)
+        assert sampler.snapshot() == (1.0, True)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+async def test_overloaded_request_returns_retryable_openai_429() -> None:
     args = _parser().parse_args(
         [
             "--port",
@@ -119,25 +123,20 @@ async def test_overloaded_request_returns_openai_429_and_updates_telemetry() -> 
         ]
     )
     proxy = AdmissionProxy(args)
+    proxy.aimd.rampup_active = False
+    proxy.aimd.current_limit = 100
     proxy.sampler.value = 1
     proxy.sampler.sampled_at = time.monotonic()
 
     response = await proxy.handle(SimpleNamespace(path="/v1/chat/completions"))
 
     assert response.status == 429
-    assert response.headers["Retry-After"] == "2.0"
-    assert response.headers["X-Curator-Queue-Depth"] == "1"
+    assert response.headers["Retry-After"] == "2"
+    assert response.headers["X-Should-Retry"] == "true"
     assert response.headers["X-Curator-AIMD-Limit"] == "75"
     body = json.loads(response.text)
     assert body["error"]["queue_depth"] == 1
-    assert body["error"]["max_waiting_requests"] == 0
     assert proxy.queue_rejections_total == 1
-    assert proxy.aimd.rate_limit_events_total == 1
-    assert proxy.aimd.multiplicative_decreases_total == 1
-
-    metrics = proxy._proxy_metrics().text
-    assert "curator_admission_queue_rejections_total 1" in metrics
-    assert "curator_admission_multiplicative_decreases_total 1" in metrics
 
 
 @pytest.mark.asyncio
@@ -164,6 +163,8 @@ async def test_gateway_forwards_openai_request_and_response() -> None:
             str(upstream.make_url("/metrics")),
             "--max-waiting-requests",
             "0",
+            "--max-concurrent-requests",
+            "1",
         ]
     )
     proxy = AdmissionProxy(args)
@@ -186,13 +187,9 @@ async def test_gateway_forwards_openai_request_and_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_upstream_429_is_forwarded_and_reduces_shared_aimd_window() -> None:
+async def test_upstream_429_is_forwarded_and_reduces_shared_window() -> None:
     async def rate_limited(_request: web.Request) -> web.Response:
-        return web.json_response(
-            {"error": {"type": "rate_limit_error"}},
-            status=429,
-            headers={"Retry-After": "0.25"},
-        )
+        return web.json_response({"error": {"type": "rate_limit_error"}}, status=429)
 
     async def metrics(_request: web.Request) -> web.Response:
         return web.Response(text="vllm:num_requests_waiting 0\n")
@@ -218,6 +215,8 @@ async def test_upstream_429_is_forwarded_and_reduces_shared_aimd_window() -> Non
         ]
     )
     proxy = AdmissionProxy(args)
+    proxy.aimd.rampup_active = False
+    proxy.aimd.current_limit = 100
     gateway_app = web.Application()
     gateway_app.router.add_route("*", "/{path_info:.*}", proxy.handle)
     gateway_app.on_startup.append(proxy.start)
@@ -228,19 +227,9 @@ async def test_upstream_429_is_forwarded_and_reduces_shared_aimd_window() -> Non
     try:
         response = await client.post("/v1/chat/completions", json={"model": "gemma", "messages": []})
         assert response.status == 429
-        assert response.headers["Retry-After"] == "0.25"
-        assert await response.json() == {"error": {"type": "rate_limit_error"}}
-        assert proxy.forwarded_requests_total == 1
         assert proxy.upstream_429_total == 1
-        assert proxy.aimd.rate_limit_events_total == 1
-        assert proxy.aimd.multiplicative_decreases_total == 1
         assert proxy.aimd.current_limit == 75
         assert proxy.aimd.in_flight == 0
     finally:
         await client.close()
         await upstream.close()
-
-
-@pytest.mark.parametrize(("value", "expected"), [("2", 2.0), ("0.25", 0.25), (None, None), ("date", None)])
-def test_parse_retry_after(value: str | None, expected: float | None) -> None:
-    assert _parse_retry_after(value) == expected

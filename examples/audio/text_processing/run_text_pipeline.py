@@ -602,7 +602,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help=(
             "JSON object forwarded to vLLM --speculative-config, for example "
-            '\'{"method":"mtp","model":"google/gemma-4-31B-it-assistant","num_speculative_tokens":4}\'.'
+            '\'{"model":"google/gemma-4-31B-it-assistant","num_speculative_tokens":4}\'.'
         ),
     )
     ap.add_argument(
@@ -674,6 +674,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help="tensor_parallel_size for the server engine (default: auto = visible GPU count).",
     )
+    srv.add_argument(
+        "--inference_router_mode",
+        choices=["round_robin", "random", "kv", "direct"],
+        default=None,
+        help=(
+            "Dynamo frontend routing policy for every request to the shared model. None preserves "
+            "Dynamo's default (round-robin for aggregated serving); 'kv' enables cache-aware routing."
+        ),
+    )
     srv.add_argument("--inference_port", type=int, default=8000, help="Server HTTP port.")
     srv.add_argument(
         "--inference_max_concurrent_requests",
@@ -687,51 +696,16 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         type=int,
         default=None,
         help=(
-            "Enable the model-level Dynamo admission gateway. It returns HTTP 429 when the vLLM "
-            "queue is greater than this value and applies shared AIMD concurrency control. None disables it."
+            "Enable shared vLLM queue admission at this per-worker threshold. "
+            "Overload returns HTTP 429 and drives the model-wide AIMD window."
         ),
     )
     srv.add_argument(
         "--inference_admission_max_concurrent_requests",
         type=int,
         default=8192,
-        help="Hard ceiling for the shared model-level AIMD window (default: 8192, matching the optimized workflow).",
+        help="Initial and maximum shared AIMD concurrency (default: 8192).",
     )
-    srv.add_argument(
-        "--inference_queue_poll_interval_seconds",
-        type=float,
-        default=0.25,
-        help="Queue-backpressure polling interval (default: 0.25).",
-    )
-    srv.add_argument(
-        "--inference_queue_stale_after_seconds",
-        type=float,
-        default=2.0,
-        help="Seconds to cache a queue-metric reading (default: 2.0).",
-    )
-    srv.add_argument(
-        "--inference_queue_retry_after_seconds",
-        type=float,
-        default=None,
-        help="Optional Retry-After delay for queue 429s; defaults to the AIMD cooldown (2 seconds).",
-    )
-    srv.add_argument(
-        "--inference_queue_metric_name",
-        type=str,
-        default="vllm:num_requests_waiting",
-        help="Prometheus metric used for queue backpressure.",
-    )
-    srv.add_argument(
-        "--inference_queue_fail_closed",
-        action="store_true",
-        help="Fail requests when queue metrics are unavailable. Default is fail-open.",
-    )
-    srv.add_argument("--inference_aimd_reduce_factor", type=float, default=0.75)
-    srv.add_argument("--inference_aimd_additive_increase", type=int, default=1)
-    srv.add_argument("--inference_aimd_success_window", type=int, default=25)
-    srv.add_argument("--inference_aimd_cooldown_seconds", type=float, default=2.0)
-    srv.add_argument("--inference_aimd_ceiling_overshoot", type=float, default=0.10)
-    srv.add_argument("--inference_aimd_rampup_seconds", type=float, default=0.0)
     srv.add_argument(
         "--inference_health_timeout",
         type=int,
@@ -845,7 +819,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     if args.enable_recover_entities and not args.use_inference_server:
         msg = "--enable_recover_entities requires --use_inference_server (RecoverEntities runs on the Dynamo server)."
         raise ValueError(msg)
-
     if args.inference_queue_max_waiting_requests is not None and not args.use_inference_server:
         msg = "--inference_queue_max_waiting_requests requires --use_inference_server."
         raise ValueError(msg)
@@ -864,9 +837,13 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         import torch
 
         from nemo_curator.core.client import RayClient
-        from nemo_curator.core.serve import DynamoServerConfig, DynamoVLLMModelConfig, InferenceServer
-        from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig
-
+        from nemo_curator.core.serve import (
+            DynamoAdmissionConfig,
+            DynamoRouterConfig,
+            DynamoServerConfig,
+            DynamoVLLMModelConfig,
+            InferenceServer,
+        )
         # Count GPUs without Ray (ray.available_resources() requires a running
         # cluster). torch.cuda honours CUDA_VISIBLE_DEVICES. Start the cluster
         # exposing those GPUs BEFORE the backend deploys; the server is torn down
@@ -923,24 +900,18 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             install_runtime_dependencies=not args.reuse_current_dynamo_environment,
             num_replicas=args.inference_max_replicas,
         )
-        admission_cfg = None
-        if args.inference_queue_max_waiting_requests is not None:
-            admission_cfg = DynamoAdmissionConfig(
+        router_cfg = DynamoRouterConfig(
+            mode=args.inference_router_mode.replace("_", "-") if args.inference_router_mode else None,
+        )
+        admission_cfg = (
+            DynamoAdmissionConfig(
                 max_waiting_requests=args.inference_queue_max_waiting_requests,
                 max_concurrent_requests=args.inference_admission_max_concurrent_requests,
-                poll_interval_seconds=args.inference_queue_poll_interval_seconds,
-                stale_after_seconds=args.inference_queue_stale_after_seconds,
-                retry_after_seconds=args.inference_queue_retry_after_seconds,
-                metric_name=args.inference_queue_metric_name,
-                fail_open=not args.inference_queue_fail_closed,
-                reduce_factor=args.inference_aimd_reduce_factor,
-                additive_increase=args.inference_aimd_additive_increase,
-                success_window=args.inference_aimd_success_window,
-                cooldown_seconds=args.inference_aimd_cooldown_seconds,
-                ceiling_overshoot=args.inference_aimd_ceiling_overshoot,
-                rampup_seconds=args.inference_aimd_rampup_seconds,
             )
-        backend_cfg = DynamoServerConfig(admission=admission_cfg)
+            if args.inference_queue_max_waiting_requests is not None
+            else None
+        )
+        backend_cfg = DynamoServerConfig(router=router_cfg, admission=admission_cfg)
 
         inference_server = InferenceServer(
             models=[model_cfg],
