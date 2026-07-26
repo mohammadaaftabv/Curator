@@ -1,0 +1,26 @@
+{
+  "p0": {
+    "default": "prompts/p0_current.md",
+    "status": "repository baseline"
+  },
+  "p1": {
+    "default": "prompts/p1_strict.md",
+    "status": "primary universal candidate"
+  },
+  "p2": {
+    "default": "prompts/p2_two_shot.md",
+    "requires": "exactly two adjudicated development examples per language",
+    "status": "conditional few-shot candidate"
+  },
+  "p3": {
+    "default": "prompts/p3_reconstruction.md",
+    "status": "explicit reconstruction-check candidate"
+  },
+  "p4": {
+    "default": "prompts/p4_brahmic.md",
+    "language_overrides": {
+      "ur": "prompts/p4_urdu.md"
+    },
+    "status": "conditional two-policy candidate"
+  }
+}

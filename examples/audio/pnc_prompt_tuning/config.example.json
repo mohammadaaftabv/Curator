@@ -1,0 +1,99 @@
+{
+  "work_root": "/lustre/fsw/portfolios/edgeai/users/aaftabv/pnc_prompt_finetuning",
+  "input_paths": [
+    "/lustre/fsw/portfolios/edgeai/projects/edgeai_riva_rivamlops/data/granary_v2/yt_local/yt_mixed_indic_non_cc_2026_07_14_135640/chunks/harvest_*.jsonl"
+  ],
+  "common_yaml_path": "tutorials/audio/granary_v2_postprocessing/common.yaml",
+  "fields": {
+    "id": "id",
+    "text": "text_original",
+    "language": "language",
+    "reference": "reference",
+    "complete": "complete",
+    "group": "audio_item_id",
+    "duration": "actual_duration"
+  },
+  "sampling": {
+    "seed": "indic-pnc-v1",
+    "languages": [
+      "as",
+      "bn",
+      "gu",
+      "hi",
+      "kn",
+      "ml",
+      "mr",
+      "or",
+      "pa",
+      "ta",
+      "te",
+      "ur"
+    ],
+    "quotas": {
+      "smoke": 5,
+      "development": 50,
+      "calibration": 25,
+      "challenge": 10,
+      "test": 50
+    },
+    "require_nonempty_text": true
+  },
+  "nvidia": {
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "api_key_env": "NVIDIA_API_KEY",
+    "timeout_seconds": 120,
+    "max_retries": 3
+  },
+  "calibration": {
+    "min_rows": 25,
+    "min_agreement_rate": 0.8,
+    "max_false_accept_rate": 0.05,
+    "max_false_reject_rate": 0.1
+  },
+  "judge_roles": [
+    {
+      "name": "broad_multilingual",
+      "candidate_models": [
+        "qwen/qwen3.5-397b-a17b",
+        "qwen/qwen3-next-80b-a3b-instruct"
+      ],
+      "supported_languages": [
+        "*"
+      ],
+      "required": true,
+      "evaluate_language_quality": true
+    },
+    {
+      "name": "indic_specialist",
+      "candidate_models": [
+        "sarvamai/sarvam-m"
+      ],
+      "supported_languages": [
+        "bn",
+        "gu",
+        "hi",
+        "kn",
+        "ml",
+        "mr",
+        "or",
+        "pa",
+        "ta",
+        "te"
+      ],
+      "required": false,
+      "evaluate_language_quality": true
+    },
+    {
+      "name": "policy_arbiter",
+      "candidate_models": [
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ],
+      "supported_languages": [
+        "*"
+      ],
+      "required": true,
+      "evaluate_language_quality": false
+    }
+  ],
+  "allowed_punctuation": ".,?!"
+}
