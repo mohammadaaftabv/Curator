@@ -1,0 +1,62 @@
+{
+  "as": {
+    "name": "Assamese",
+    "preservation": "Language: Assamese (as). Assamese uses the Bengali–Assamese script, written left to right, with no uppercase/lowercase distinction. Preserve Assamese-specific letters such as ৰ and ৱ, every combining mark, virama/hasanta sequence, conjunct, ZWJ/ZWNJ, digit, symbol, apostrophe already present, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include কি, কিয়, কেতিয়া, ক’ত or ক'ত, কোন, and কেনেকৈ. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "bn": {
+    "name": "Bengali",
+    "preservation": "Language: Bengali (bn). Bengali uses the Bengali script, written left to right, with no uppercase/lowercase distinction. Preserve every combining mark, hasanta, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include কি, কী, কেন, কখন, কোথায়, কে, and কীভাবে. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "gu": {
+    "name": "Gujarati",
+    "preservation": "Language: Gujarati (gu). Gujarati is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include શું, કેમ, ક્યારે, ક્યાં, કોણ, and કેવી રીતે. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "hi": {
+    "name": "Hindi",
+    "preservation": "Language: Hindi (hi). Hindi uses Devanagari, written left to right, with no uppercase/lowercase distinction. Preserve every Devanagari code point, vowel sign/matra, nukta, anusvara, chandrabindu, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include क्या, क्यों, कब, कहाँ, कैसे, कौन, and किस. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "kn": {
+    "name": "Kannada",
+    "preservation": "Language: Kannada (kn). Kannada is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include ಏನು, ಏಕೆ, ಯಾಕೆ, ಯಾವಾಗ, ಎಲ್ಲಿ, ಯಾರು, and ಹೇಗೆ. Question particles and endings are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "ml": {
+    "name": "Malayalam",
+    "preservation": "Language: Malayalam (ml). Malayalam is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, chillu letter, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include എന്ത്, എന്തുകൊണ്ട്, എപ്പോൾ, എവിടെ, ആര്, and എങ്ങനെ. Question particles and endings are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "mr": {
+    "name": "Marathi",
+    "preservation": "Language: Marathi (mr). Marathi uses Devanagari, written left to right, with no uppercase/lowercase distinction. Preserve every vowel sign/matra, anusvara, chandrabindu, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include काय, का, कधी, कुठे, कोण, and कसे. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "or": {
+    "name": "Odia",
+    "preservation": "Language: Odia (or). Odia is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include କଣ, କାହିଁକି, କେବେ, କେଉଁଠି, କିଏ, and କିପରି. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "pa": {
+    "name": "Punjabi",
+    "preservation": "Language: Punjabi (pa). Punjabi in this dataset uses Gurmukhi, written left to right, with no uppercase/lowercase distinction. Preserve every vowel sign, addak, bindi/tippi, nukta form, conjunct behavior, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include ਕੀ, ਕਿਉਂ, ਕਦੋਂ, ਕਿੱਥੇ, ਕੌਣ, and ਕਿਵੇਂ. These cues are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "ta": {
+    "name": "Tamil",
+    "preservation": "Language: Tamil (ta). Tamil is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, pulli, combining sequence, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include என்ன, ஏன், எப்போது, எங்கே, யார், and எப்படி. Interrogative suffixes and particles are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "te": {
+    "name": "Telugu",
+    "preservation": "Language: Telugu (te). Telugu is written left to right and has no uppercase/lowercase distinction. Preserve every vowel sign, virama, conjunct sequence, ZWJ/ZWNJ, digit, symbol, spelling, and lexical boundary exactly.",
+    "boundary_cues": "Possible interrogative cues include ఏమి, ఏంటి, ఎందుకు, ఎప్పుడు, ఎక్కడ, ఎవరు, and ఎలా. Question particles and endings are contextual evidence only and must never trigger a question mark automatically."
+  },
+  "ur": {
+    "name": "Urdu",
+    "preservation": "Language: Urdu (ur). Urdu uses an Arabic-derived script written right to left and has no uppercase/lowercase distinction. Preserve logical Unicode code-point order, joining behavior, ZWJ/ZWNJ, diacritics, digits, symbols, spelling, and lexical boundaries exactly. Do not reverse, reshape, translate, transliterate, or normalize the text.",
+    "boundary_cues": "Possible interrogative cues include کیا, کیوں, کب, کہاں, کون, and کیسے. These cues are contextual evidence only and must never trigger a question mark automatically. Emit only the four canonical ASCII marks allowed by the shared prompt contract."
+  }
+}

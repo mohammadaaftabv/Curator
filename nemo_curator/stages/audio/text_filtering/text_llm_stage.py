@@ -170,6 +170,9 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
         model_id: HuggingFace model identifier.
         prompt_text: System prompt string (takes precedence over prompt_file).
         prompt_file: Path to a file containing the system prompt.
+        language_key: Task-data field containing the per-row language code.
+        language_blocks: Optional mapping used to replace a single
+            ``{language_block}`` placeholder per row.
         text_key: Input field to read text from.
         output_text_key: Output field to write the result to.
         skip_me_key: Field that flags entries to skip.
@@ -189,6 +192,8 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
     model_id: str = "Qwen/Qwen3.5-35B-A3B-FP8"
     prompt_text: str | None = None
     prompt_file: str | None = None
+    language_key: str = "source_lang"
+    language_blocks: dict[str, str] | None = None
     text_key: str = "pnc_text"
     output_text_key: str = "output_text"
     skip_me_key: str = "_skipme"
@@ -301,22 +306,41 @@ class TextLLMStage(ProcessingStage[AudioTask, AudioTask]):
 
     # ── Prompt formatting ────────────────────────────────────────────
 
-    def _format_prompt(self, user_text: str, task_data: dict | None = None) -> str:
+    def _render_prompt_template(self, user_text: str, task_data: dict | None = None) -> tuple[str, bool]:
+        """Resolve per-row placeholders while preserving the message shape."""
+
         prompt_template = self._system_prompt
+        language = task_data.get(self.language_key, "English") if task_data else "English"
 
         if "{language}" in prompt_template:
-            lang = task_data.get("source_lang", "English") if task_data else "English"
-            prompt_template = prompt_template.replace("{language}", lang)
+            prompt_template = prompt_template.replace("{language}", language)
 
-        if "{text}" in prompt_template:
+        if "{language_block}" in prompt_template:
+            if self.language_blocks is None:
+                msg = "Prompt contains {language_block}, but no language_blocks mapping was configured"
+                raise ValueError(msg)
+            language_block = self.language_blocks.get(language)
+            if language_block is None:
+                msg = f"No language block configured for {self.language_key}={language!r}"
+                raise ValueError(msg)
+            prompt_template = prompt_template.replace("{language_block}", language_block)
+
+        embeds_text = "{text}" in prompt_template
+        if embeds_text:
             prompt_template = prompt_template.replace("{text}", user_text)
-            messages = [{"role": "user", "content": prompt_template}]
-        else:
-            messages = [
-                {"role": "system", "content": prompt_template},
-                {"role": "user", "content": user_text},
-            ]
+        return prompt_template, embeds_text
 
+    def _build_messages(self, user_text: str, task_data: dict | None = None) -> list[dict[str, str]]:
+        prompt_template, embeds_text = self._render_prompt_template(user_text, task_data)
+        if embeds_text:
+            return [{"role": "user", "content": prompt_template}]
+        return [
+            {"role": "system", "content": prompt_template},
+            {"role": "user", "content": user_text},
+        ]
+
+    def _format_prompt(self, user_text: str, task_data: dict | None = None) -> str:
+        messages = self._build_messages(user_text, task_data)
         return self._tokenizer.apply_chat_template(
             messages,
             tokenize=False,

@@ -142,24 +142,6 @@ class RemoteTextLLMStage(TextLLMStage):
 
     # ── Prompt / inference ───────────────────────────────────────────
 
-    def _build_messages(self, user_text: str, task_data: dict | None = None) -> list[dict]:
-        """Build the chat messages (server applies the template).
-
-        Mirrors :meth:`TextLLMStage._format_prompt` message construction
-        but returns the raw message list instead of a templated string.
-        """
-        prompt_template = self._system_prompt
-        if "{language}" in prompt_template:
-            lang = task_data.get("source_lang", "English") if task_data else "English"
-            prompt_template = prompt_template.replace("{language}", lang)
-        if "{text}" in prompt_template:
-            prompt_template = prompt_template.replace("{text}", user_text)
-            return [{"role": "user", "content": prompt_template}]
-        return [
-            {"role": "system", "content": prompt_template},
-            {"role": "user", "content": user_text},
-        ]
-
     def _batch_timeout(self, n_requests: int) -> float:
         """Generous wall-clock cap for a whole batch, so a real hang surfaces.
 

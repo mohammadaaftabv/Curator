@@ -92,17 +92,20 @@ from nemo_curator.stages.audio.alm.sharded_manifest_writer import ShardedManifes
 from nemo_curator.stages.audio.text_filtering.acoustic_distractor import AcousticDistractorStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_extraction import ContextualASRExtractionStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_prompt_variant import ContextualASRPromptVariantStage
+from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.instruction_packer import InstructionPackerStage
 from nemo_curator.stages.audio.text_filtering.llm_language_verification import LLMLanguageVerificationStage
+from nemo_curator.stages.audio.text_filtering.pnc_prompt_variants import (
+    PNC_PROMPT_VERSIONS,
+    get_pnc_prompt_configuration,
+)
 from nemo_curator.stages.audio.text_filtering.remote_contextual_asr_extraction import (
     RemoteContextualASRExtractionStage,
 )
-from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 from nemo_curator.stages.resources import Resources
-
 
 _PROMPT_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent
@@ -116,7 +119,6 @@ _ITN_PROMPT = _PROMPT_DIR / "itn_prompt.md"
 _TN_PROMPT = _PROMPT_DIR / "tn_prompt.md"
 _CORRECTION_PROMPT = _PROMPT_DIR / "correction_prompt.md"
 _CAPTIONING_PROMPT = _PROMPT_DIR / "captioning_prompt.md"
-_PNC_PROMPT = _PROMPT_DIR / "pnc_prompt.md"
 _CONTEXT_ASR_PROMPT = _PROMPT_DIR / "contextual_asr_prompt.md"
 
 # Minimum recommended max_model_len when --enable_context_asr is used.
@@ -309,6 +311,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     ap.add_argument(
         "--pnc_prompt_file", type=str, default=None, help="Path to PnC prompt file. Defaults to bundled pnc_prompt.md."
+    )
+    ap.add_argument(
+        "--pnc_prompt_version",
+        type=str,
+        choices=PNC_PROMPT_VERSIONS,
+        default="p0",
+        help=(
+            "Bundled PnC prompt version. p0 is the unchanged reference; p1 adds strict preservation; "
+            "p2 adds reconstruction; p3 adds conservative boundary cues. Ignored when a custom "
+            "--pnc_prompt_file is supplied."
+        ),
     )
     ap.add_argument(
         "--language_id_prompt_file",
@@ -825,7 +838,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     itn_prompt = args.itn_prompt_file or str(_ITN_PROMPT)
     itn_no_disfl_prompt = args.itn_no_disfluencies_prompt_file or str(_CORRECTION_PROMPT)
     captioning_prompt = args.captioning_prompt_file or str(_CAPTIONING_PROMPT)
-    pnc_prompt = args.pnc_prompt_file or str(_PNC_PROMPT)
+    pnc_language_blocks = None
+    if args.pnc_prompt_file:
+        pnc_prompt = args.pnc_prompt_file
+    else:
+        pnc_prompt, pnc_language_blocks = get_pnc_prompt_configuration(args.pnc_prompt_version)
     language_id_prompt = args.language_id_prompt_file or str(_LANGUAGE_ID_PROMPT)
     context_asr_prompt = args.context_asr_prompt_file or str(_CONTEXT_ASR_PROMPT)
     code_switching_prompt = args.code_switching_prompt_file or str(_CODE_SWITCHING_PROMPT)
@@ -928,12 +945,14 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_stage_cls(
                 name="PnCRestoration",
                 prompt_file=pnc_prompt,
+                language_blocks=pnc_language_blocks,
                 text_key=pnc_input_key,
                 output_text_key=args.pnc_output_key,
                 **shared_model_kwargs,
             )
         )
-        logger.info(f"PnC stage enabled: {pnc_input_key} → {args.pnc_output_key}")
+        prompt_label = "custom" if args.pnc_prompt_file else args.pnc_prompt_version
+        logger.info(f"PnC stage enabled: {pnc_input_key} → {args.pnc_output_key} (prompt_version={prompt_label})")
 
     # post_fused_stages: stages that depend on fused output (itn_raw, llm_language_prediction)
     # and must be inserted after the fused stage when use_fusing is active.
