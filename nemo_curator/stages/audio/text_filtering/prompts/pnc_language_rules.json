@@ -1,14 +1,14 @@
 {
-  "as": "Assamese: Use modern Assamese punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
-  "bn": "Bengali: Use modern Bengali punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
-  "gu": "Gujarati: Use conventional modern Gujarati sentence and clause punctuation only where the wording supports it.",
-  "hi": "Hindi: Use modern Hindi punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
-  "kn": "Kannada: Use conventional modern Kannada sentence and clause punctuation only where the wording supports it.",
-  "ml": "Malayalam: Use conventional modern Malayalam sentence and clause punctuation only where the wording supports it.",
-  "mr": "Marathi: Use conventional modern Marathi sentence and clause punctuation only where the wording supports it.",
-  "or": "Odia: Use modern Odia punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
-  "pa": "Punjabi: Use modern Punjabi punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
-  "ta": "Tamil: Use conventional modern Tamil sentence and clause punctuation only where the wording supports it.",
-  "te": "Telugu: Use conventional modern Telugu sentence and clause punctuation only where the wording supports it.",
-  "ur": "Urdu: Prefer Urdu comma (،), semicolon (؛), question mark (؟), and full stop (۔) where natural. Preserve logical Unicode order and never reverse or reshape text; a Western mark may remain appropriate inside a clearly code-switched span."
+  "as": "Assamese uses an uncased script. Use modern Assamese punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
+  "bn": "Bengali uses an uncased script. Use modern Bengali punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
+  "gu": "Gujarati uses an uncased script. Use conventional modern Gujarati sentence and clause punctuation only where the wording supports it.",
+  "hi": "Hindi uses uncased Devanagari. Use modern Hindi punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
+  "kn": "Kannada uses an uncased script. Use conventional modern Kannada sentence and clause punctuation only where the wording supports it.",
+  "ml": "Malayalam uses an uncased script. Use conventional modern Malayalam sentence and clause punctuation only where the wording supports it.",
+  "mr": "Marathi uses uncased Devanagari. Use conventional modern Marathi sentence and clause punctuation only where the wording supports it.",
+  "or": "Odia uses an uncased script. Use modern Odia punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
+  "pa": "Punjabi uses uncased Gurmukhi. Use modern Punjabi punctuation. Danda (।) may mark a natural sentence boundary but is not mandatory; use double danda (॥) only for genuine verse or sectional text.",
+  "ta": "Tamil uses an uncased script. Use conventional modern Tamil sentence and clause punctuation only where the wording supports it.",
+  "te": "Telugu uses an uncased script. Use conventional modern Telugu sentence and clause punctuation only where the wording supports it.",
+  "ur": "Urdu uses an uncased Arabic-derived script. Prefer Urdu comma (،), semicolon (؛), question mark (؟), and full stop (۔) where natural. Preserve logical Unicode order and never reverse or reshape text; a Western mark may remain appropriate inside a clearly code-switched span."
 }

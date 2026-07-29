@@ -67,6 +67,34 @@ def test_remote_stage_uses_same_row_scoped_rendering() -> None:
     assert messages == [{"role": "user", "content": "hi\nHindi-only rule.\nनमस्ते दुनिया"}]
 
 
+def test_bundled_hindi_render_contains_no_other_language_guidance() -> None:
+    stage = TextLLMStage(
+        prompt_file=str(PROMPT_DIR / "pnc_prompt.md"),
+        language_rules=load_pnc_language_rules(),
+    )
+    stage._system_prompt = stage._resolve_prompt()
+
+    rendered = stage._render_prompt_template("नमस्ते दुनिया", {"source_lang": "hi"})
+
+    assert "Hindi" in rendered
+    for other_language in (
+        "Assamese",
+        "Bengali",
+        "Gujarati",
+        "Kannada",
+        "Malayalam",
+        "Marathi",
+        "Odia",
+        "Punjabi",
+        "Tamil",
+        "Telugu",
+        "Urdu",
+        "Arabic",
+        "Gurmukhi",
+    ):
+        assert other_language not in rendered
+
+
 @pytest.mark.parametrize("task_data", [None, {}, {"source_lang": ""}, {"source_lang": "xx"}])
 def test_language_rule_resolution_fails_closed(task_data: dict | None) -> None:
     stage = TextLLMStage(
