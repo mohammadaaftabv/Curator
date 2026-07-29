@@ -595,24 +595,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         "stages to it as CPU-only HTTP clients. Without this flag, stages run in-process vLLM.",
     )
     srv.add_argument(
-        "--external_inference_base_url",
-        type=str,
-        default=None,
-        help=(
-            "Use an existing OpenAI-compatible endpoint instead of starting the local Dynamo server, "
-            "for example https://integrate.api.nvidia.com/v1. Mutually exclusive with --use_inference_server."
-        ),
-    )
-    srv.add_argument(
-        "--external_inference_api_key_env",
-        type=str,
-        default="NVIDIA_API_KEY",
-        help=(
-            "Environment variable containing the API key for --external_inference_base_url. "
-            "The secret value is never accepted through a config file or logged."
-        ),
-    )
-    srv.add_argument(
         "--inference_served_model_name",
         type=str,
         default=None,
@@ -725,10 +707,6 @@ def _finalize_done_markers(manifest_files: list, output_dir: str) -> None:
 def main() -> None:  # noqa: C901, PLR0912, PLR0915
     args = _build_arg_parser().parse_args()
 
-    if args.use_inference_server and args.external_inference_base_url:
-        message = "--use_inference_server and --external_inference_base_url are mutually exclusive"
-        raise ValueError(message)
-
     if (
         not args.enable_tn
         and not args.enable_itn
@@ -755,30 +733,16 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         raise ValueError(msg)
 
     # ── Optional Dynamo inference server ─────────────────────────────
-    # Three modes:
+    # Two modes:
     #   --use_inference_server -> start a local RayClient + NVIDIA Dynamo server
     #                             and route all LLM stages to it as HTTP clients
-    #   --external_inference_base_url
-    #                          -> route LLM stages to an existing OpenAI-compatible endpoint
     #   (default)              -> in-process vLLM, one engine per stage
     # Resolved BEFORE building stages so the server is healthy at pipeline start.
     inference_server = None
     ray_client = None
     remote_base_url = None
     remote_model_name = None
-    remote_api_key = args.inference_api_key
-    if args.external_inference_base_url:
-        api_key_env = args.external_inference_api_key_env.strip()
-        if not api_key_env:
-            message = "--external_inference_api_key_env must be non-empty"
-            raise ValueError(message)
-        remote_api_key = os.environ.get(api_key_env, "")
-        if not remote_api_key:
-            message = f"--external_inference_base_url requires a non-empty {api_key_env} environment variable"
-            raise ValueError(message)
-        remote_base_url = args.external_inference_base_url.rstrip("/")
-        remote_model_name = args.inference_served_model_name or args.model_id
-    elif args.use_inference_server:
+    if args.use_inference_server:
         import torch
 
         from nemo_curator.core.client import RayClient
@@ -856,7 +820,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         remote_kwargs = {
             "inference_base_url": remote_base_url,
             "served_model_name": remote_model_name,
-            "inference_api_key": remote_api_key,
+            "inference_api_key": args.inference_api_key,
             "max_concurrent_requests": args.inference_max_concurrent_requests,
             "request_timeout": args.inference_request_timeout,
         }
