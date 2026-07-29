@@ -92,17 +92,17 @@ from nemo_curator.stages.audio.alm.sharded_manifest_writer import ShardedManifes
 from nemo_curator.stages.audio.text_filtering.acoustic_distractor import AcousticDistractorStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_extraction import ContextualASRExtractionStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_prompt_variant import ContextualASRPromptVariantStage
+from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.instruction_packer import InstructionPackerStage
 from nemo_curator.stages.audio.text_filtering.llm_language_verification import LLMLanguageVerificationStage
+from nemo_curator.stages.audio.text_filtering.pnc_language_rules import load_pnc_language_rules
 from nemo_curator.stages.audio.text_filtering.remote_contextual_asr_extraction import (
     RemoteContextualASRExtractionStage,
 )
-from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 from nemo_curator.stages.resources import Resources
-
 
 _PROMPT_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent
@@ -117,6 +117,7 @@ _TN_PROMPT = _PROMPT_DIR / "tn_prompt.md"
 _CORRECTION_PROMPT = _PROMPT_DIR / "correction_prompt.md"
 _CAPTIONING_PROMPT = _PROMPT_DIR / "captioning_prompt.md"
 _PNC_PROMPT = _PROMPT_DIR / "pnc_prompt.md"
+_PNC_LANGUAGE_RULES = _PROMPT_DIR / "pnc_language_rules.json"
 _CONTEXT_ASR_PROMPT = _PROMPT_DIR / "contextual_asr_prompt.md"
 
 # Minimum recommended max_model_len when --enable_context_asr is used.
@@ -309,6 +310,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     ap.add_argument(
         "--pnc_prompt_file", type=str, default=None, help="Path to PnC prompt file. Defaults to bundled pnc_prompt.md."
+    )
+    ap.add_argument(
+        "--pnc_language_rules_file",
+        type=str,
+        default=None,
+        help=(
+            "JSON mapping used to resolve the PnC prompt's {language_rules} placeholder. "
+            "Defaults to bundled pnc_language_rules.json and is loaded only when the selected prompt uses the placeholder."
+        ),
     )
     ap.add_argument(
         "--language_id_prompt_file",
@@ -585,6 +595,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         "stages to it as CPU-only HTTP clients. Without this flag, stages run in-process vLLM.",
     )
     srv.add_argument(
+        "--external_inference_base_url",
+        type=str,
+        default=None,
+        help=(
+            "Use an existing OpenAI-compatible endpoint instead of starting the local Dynamo server, "
+            "for example https://integrate.api.nvidia.com/v1. Mutually exclusive with --use_inference_server."
+        ),
+    )
+    srv.add_argument(
+        "--external_inference_api_key_env",
+        type=str,
+        default="NVIDIA_API_KEY",
+        help=(
+            "Environment variable containing the API key for --external_inference_base_url. "
+            "The secret value is never accepted through a config file or logged."
+        ),
+    )
+    srv.add_argument(
         "--inference_served_model_name",
         type=str,
         default=None,
@@ -697,6 +725,10 @@ def _finalize_done_markers(manifest_files: list, output_dir: str) -> None:
 def main() -> None:  # noqa: C901, PLR0912, PLR0915
     args = _build_arg_parser().parse_args()
 
+    if args.use_inference_server and args.external_inference_base_url:
+        message = "--use_inference_server and --external_inference_base_url are mutually exclusive"
+        raise ValueError(message)
+
     if (
         not args.enable_tn
         and not args.enable_itn
@@ -723,16 +755,30 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         raise ValueError(msg)
 
     # ── Optional Dynamo inference server ─────────────────────────────
-    # Two modes:
+    # Three modes:
     #   --use_inference_server -> start a local RayClient + NVIDIA Dynamo server
     #                             and route all LLM stages to it as HTTP clients
+    #   --external_inference_base_url
+    #                          -> route LLM stages to an existing OpenAI-compatible endpoint
     #   (default)              -> in-process vLLM, one engine per stage
     # Resolved BEFORE building stages so the server is healthy at pipeline start.
     inference_server = None
     ray_client = None
     remote_base_url = None
     remote_model_name = None
-    if args.use_inference_server:
+    remote_api_key = args.inference_api_key
+    if args.external_inference_base_url:
+        api_key_env = args.external_inference_api_key_env.strip()
+        if not api_key_env:
+            message = "--external_inference_api_key_env must be non-empty"
+            raise ValueError(message)
+        remote_api_key = os.environ.get(api_key_env, "")
+        if not remote_api_key:
+            message = f"--external_inference_base_url requires a non-empty {api_key_env} environment variable"
+            raise ValueError(message)
+        remote_base_url = args.external_inference_base_url.rstrip("/")
+        remote_model_name = args.inference_served_model_name or args.model_id
+    elif args.use_inference_server:
         import torch
 
         from nemo_curator.core.client import RayClient
@@ -810,7 +856,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
         remote_kwargs = {
             "inference_base_url": remote_base_url,
             "served_model_name": remote_model_name,
-            "inference_api_key": args.inference_api_key,
+            "inference_api_key": remote_api_key,
             "max_concurrent_requests": args.inference_max_concurrent_requests,
             "request_timeout": args.inference_request_timeout,
         }
@@ -826,6 +872,15 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     itn_no_disfl_prompt = args.itn_no_disfluencies_prompt_file or str(_CORRECTION_PROMPT)
     captioning_prompt = args.captioning_prompt_file or str(_CAPTIONING_PROMPT)
     pnc_prompt = args.pnc_prompt_file or str(_PNC_PROMPT)
+    pnc_language_rules = None
+    if args.enable_pnc and "{language_rules}" in Path(pnc_prompt).read_text(encoding="utf-8"):
+        rules_file = args.pnc_language_rules_file or str(_PNC_LANGUAGE_RULES)
+        pnc_language_rules = load_pnc_language_rules(rules_file)
+        logger.info(
+            "PnC per-row language rules enabled from {} (codes={})",
+            rules_file,
+            sorted(pnc_language_rules),
+        )
     language_id_prompt = args.language_id_prompt_file or str(_LANGUAGE_ID_PROMPT)
     context_asr_prompt = args.context_asr_prompt_file or str(_CONTEXT_ASR_PROMPT)
     code_switching_prompt = args.code_switching_prompt_file or str(_CODE_SWITCHING_PROMPT)
@@ -928,6 +983,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_stage_cls(
                 name="PnCRestoration",
                 prompt_file=pnc_prompt,
+                language_rules=pnc_language_rules,
                 text_key=pnc_input_key,
                 output_text_key=args.pnc_output_key,
                 **shared_model_kwargs,
