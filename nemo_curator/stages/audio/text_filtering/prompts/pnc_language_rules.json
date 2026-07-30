@@ -1,14 +1,14 @@
 {
-  "as": "Assamese inserted glyphs: declarative or imperative terminal `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `.` or `...` as an alternative.",
-  "bn": "Bengali inserted glyphs: declarative or imperative terminal `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `.` or `...` as an alternative.",
-  "gu": "Gujarati inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "hi": "Hindi inserted glyphs: declarative or imperative terminal `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `.` or `...` as an alternative.",
-  "kn": "Kannada inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "ml": "Malayalam inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "mr": "Marathi inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "or": "Odia inserted glyphs: declarative or imperative terminal `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `.` or `...` as an alternative.",
-  "pa": "Punjabi in Gurmukhi inserted glyphs: declarative or imperative terminal `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `.` or `...` as an alternative.",
-  "ta": "Tamil inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "te": "Telugu inserted glyphs: declarative or imperative terminal `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. Do not generate `।` or `...` as an alternative.",
-  "ur": "Urdu inserted glyphs: declarative or imperative terminal `۔`; direct question `؟`; exclamation `!`; comma `،`; semicolon `؛`; colon `:`; ellipsis `…`. Do not substitute `.`, `?`, `,`, `;`, or `...`. Preserve logical Unicode order."
+  "as": "Assamese exact inserted glyphs — statement/command `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "bn": "Bengali exact inserted glyphs — statement/command `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "gu": "Gujarati exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "hi": "Hindi exact inserted glyphs — statement/command `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "kn": "Kannada exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "ml": "Malayalam exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "mr": "Marathi exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "or": "Odia exact inserted glyphs — statement/command `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "pa": "Punjabi in Gurmukhi exact inserted glyphs — statement/command `।`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "ta": "Tamil exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "te": "Telugu exact inserted glyphs — statement/command `.`; direct question `?`; exclamation `!`; comma `,`; semicolon `;`; colon `:`; ellipsis `…`. These are the only glyphs to insert.",
+  "ur": "Urdu exact inserted glyphs — statement/command `۔`; direct question `؟`; exclamation `!`; comma `،`; semicolon `؛`; colon `:`; ellipsis `…`. These are the only glyphs to insert; preserve logical Unicode order."
 }
