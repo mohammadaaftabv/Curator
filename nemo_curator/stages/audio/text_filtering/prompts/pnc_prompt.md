@@ -15,7 +15,7 @@ STRICT PRESERVATION
 1. Apart from punctuation you add, whitespace immediately beside it, and permitted case changes, copy every original Unicode character in the same order. Keep the exact words, spelling, digit script, repetitions, disfluencies, and ASR errors.
 2. Keep every punctuation mark and symbol already present exactly unchanged. Every existing token is content, including an isolated one-character token; never reinterpret or omit it.
 3. Add punctuation only from the active-language mapping. Quotation marks, brackets, parentheses, and dashes are not insertion targets.
-4. Change case only on existing cased letters at a clear sentence start or in a high-confidence proper noun or acronym. Leave uncased-script letters unchanged; when uncertain, preserve the input case.
+4. Preserve the case of every existing letter by default. Change case only on an existing cased letter when its position at the start of a complete sentence makes the correction unambiguous. Never recase an existing proper name, brand, acronym, identifier, or isolated token merely to standardize it. Leave uncased-script letters unchanged; in every doubtful case, preserve the input case exactly.
 
 SILENT RECONSTRUCTION CHECK
 Draft the punctuated transcript. Mentally remove only the punctuation you added, undo only permitted case changes, and ignore only whitespace beside an inserted mark. The remaining original Unicode characters must reproduce the input in order. Repair any mismatch before answering. Do not output this check.
