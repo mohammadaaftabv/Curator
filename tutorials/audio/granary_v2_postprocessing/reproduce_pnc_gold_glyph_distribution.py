@@ -46,12 +46,12 @@ COHORTS = {
     "development": {
         "dataset": "Development — ASR-style prompt-finetuning 12k",
         "pattern": "pnc_development12k_{language}_1000.jsonl",
-        "expected_sha256": "7bbf5bff8b4ea0bdac13a9c737202c19e0f0592fc95d49c4e14e1e730ee29d52",
+        "expected_sha256": "7bbf5bff8b4ea0bdac13a9c737202c19e0f0592fc95d49c4e14e1e730ee29d52",  # pragma: allowlist secret
     },
     "heldout": {
         "dataset": "Held-out — ASR-style multilingual test 12k",
         "pattern": "pnc_heldout12k_{language}_1000.jsonl",
-        "expected_sha256": "db2e2acf0428deac958a7fbf8b3a83d5bd34ecb11bed9e1118753e2fbf05e97a",
+        "expected_sha256": "db2e2acf0428deac958a7fbf8b3a83d5bd34ecb11bed9e1118753e2fbf05e97a",  # pragma: allowlist secret
     },
 }
 
