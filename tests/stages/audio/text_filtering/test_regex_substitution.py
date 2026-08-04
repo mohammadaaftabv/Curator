@@ -20,6 +20,8 @@ import yaml
 from nemo_curator.stages.audio.text_filtering.regex_substitution import RegexSubstitutionStage
 from nemo_curator.tasks import AudioTask
 
+GRANARY_COMMON_RULES = Path(__file__).parents[4] / "tutorials" / "audio" / "granary_v2_postprocessing" / "common.yaml"
+
 
 def _write_rules(tmp_path: Path, rules: list[dict]) -> str:
     p = tmp_path / "rules.yaml"
@@ -119,3 +121,15 @@ def test_preserves_existing_skip_me_on_empty_result(tmp_path: Path) -> None:
     task = AudioTask(data={"cleaned_text": "hello", "skip_me": "Hallucination"})
     result = stage.process(task)
     assert result.data["skip_me"] == "Hallucination"
+
+
+def test_granary_common_rules_preserve_pnc_contract_punctuation() -> None:
+    stage = RegexSubstitutionStage(regex_params_yaml=str(GRANARY_COMMON_RULES))
+    stage.setup()
+    text = "हिंदी। प्रश्न? विस्मय! सूची, अर्ध; कॉलन: विराम… اردو\u06d4 سوال؟ تعجب! فہرست، شق؛ کالن: وقف…"
+    task = AudioTask(data={"pred_text": text, "_skipme": ""})
+
+    result = stage.process(task)
+
+    assert result.data["cleaned_text"] == text
+    assert result.data["_skipme"] == ""
