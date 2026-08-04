@@ -1,0 +1,110 @@
+{
+  "as": [
+    "danda",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "bn": [
+    "danda",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "gu": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "hi": [
+    "danda",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "kn": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "ml": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "mr": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "or": [
+    "danda",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "pa": [
+    "danda",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "ta": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "te": [
+    "period",
+    "question",
+    "exclamation",
+    "comma",
+    "semicolon",
+    "colon",
+    "ellipsis"
+  ],
+  "ur": [
+    "urdu_full_stop",
+    "urdu_question",
+    "exclamation",
+    "urdu_comma",
+    "urdu_semicolon",
+    "colon",
+    "ellipsis"
+  ]
+}
