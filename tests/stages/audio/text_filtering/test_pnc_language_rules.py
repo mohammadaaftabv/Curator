@@ -27,12 +27,28 @@ PROMPT_DIR = (
     Path(__file__).parents[4] / "nemo_curator" / "stages" / "audio" / "text_filtering" / "prompts"
 )
 
+ARABIC_LANGUAGE_CODES = {"ks", "ur"}
+NON_ARABIC_PUNCTUATION = (".", "?", "!", ",", ";", ":", "...")
+ARABIC_PUNCTUATION = ("\u06d4", "\u061f", "!", "\u060c", "\u061b", ":", "…")
+
 
 def test_bundled_language_rules_have_exact_target_codes() -> None:
     rules = load_pnc_language_rules()
 
     assert tuple(rules) == PNC_LANGUAGE_CODES
     assert all(rule.strip() for rule in rules.values())
+
+
+def test_bundled_language_rules_follow_script_punctuation_policy() -> None:
+    rules = load_pnc_language_rules()
+
+    for language, rule in rules.items():
+        punctuation = tuple(rule.split("`")[1::2])
+        expected = ARABIC_PUNCTUATION if language in ARABIC_LANGUAGE_CODES else NON_ARABIC_PUNCTUATION
+        assert punctuation == expected
+
+    assert "ellipsis sequence `...`" in rules["mni"]
+    assert "ellipsis `…`" in rules["ks"]
 
 
 def test_pnc_prompt_uses_one_language_rules_placeholder() -> None:
@@ -67,32 +83,44 @@ def test_remote_stage_uses_same_row_scoped_rendering() -> None:
     assert messages == [{"role": "user", "content": "hi\nHindi-only rule.\nनमस्ते दुनिया"}]
 
 
-def test_bundled_hindi_render_contains_no_other_language_guidance() -> None:
+@pytest.mark.parametrize("language", PNC_LANGUAGE_CODES)
+def test_bundled_render_contains_only_active_language_guidance(language: str) -> None:
     stage = TextLLMStage(
         prompt_file=str(PROMPT_DIR / "pnc_prompt.md"),
         language_rules=load_pnc_language_rules(),
     )
     stage._system_prompt = stage._resolve_prompt()
 
-    rendered = stage._render_prompt_template("नमस्ते दुनिया", {"source_lang": "hi"})
+    rendered = stage._render_prompt_template("sample", {"source_lang": language})
 
-    assert "Hindi" in rendered
+    active_rule = load_pnc_language_rules()[language]
+    assert active_rule in rendered
     for other_language in (
         "Assamese",
         "Bengali",
+        "Bodo",
+        "Dogri",
         "Gujarati",
+        "Hindi",
         "Kannada",
+        "Kashmiri",
+        "Konkani",
         "Malayalam",
+        "Maithili",
+        "Manipuri",
         "Marathi",
+        "Nepali",
         "Odia",
         "Punjabi",
+        "Santali",
+        "Sanskrit",
+        "Sindhi",
         "Tamil",
         "Telugu",
         "Urdu",
-        "Arabic",
-        "Gurmukhi",
     ):
-        assert other_language not in rendered
+        if other_language not in active_rule:
+            assert other_language not in rendered
 
 
 @pytest.mark.parametrize("task_data", [None, {}, {"source_lang": ""}, {"source_lang": "xx"}])

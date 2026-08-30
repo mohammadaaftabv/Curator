@@ -32,13 +32,23 @@ PNC_LANGUAGE_CODES = (
     "ta",
     "te",
     "ur",
+    "brx",
+    "doi",
+    "kok",
+    "ks",
+    "mai",
+    "mni",
+    "ne",
+    "sa",
+    "sat",
+    "sd",
 )
 
 DEFAULT_PNC_LANGUAGE_RULES_FILE = Path(__file__).parent / "prompts" / "pnc_language_rules.json"
 
 
 def load_pnc_language_rules(path: str | Path = DEFAULT_PNC_LANGUAGE_RULES_FILE) -> dict[str, str]:
-    """Return a deterministic, fail-closed mapping for the 12 target languages."""
+    """Return a deterministic, fail-closed mapping for the 22 target languages."""
 
     rules_path = Path(path)
     raw = json.loads(rules_path.read_text(encoding="utf-8"))

@@ -123,10 +123,30 @@ def test_preserves_existing_skip_me_on_empty_result(tmp_path: Path) -> None:
     assert result.data["skip_me"] == "Hallucination"
 
 
-def test_granary_common_rules_preserve_pnc_contract_punctuation() -> None:
+def test_granary_common_rules_apply_pnc_script_contract() -> None:
     stage = RegexSubstitutionStage(regex_params_yaml=str(GRANARY_COMMON_RULES))
     stage.setup()
-    text = "हिंदी। प्रश्न? विस्मय! सूची, अर्ध; कॉलन: विराम… اردو\u06d4 سوال؟ تعجب! فہرست، شق؛ کالن: وقف…"
+    text = (
+        "हिंदी। संस्कृत॥ प्रश्न? विराम... "
+        "ꯃꯤꯇꯩ꯫ ꯑꯥꯍꯪ꫱ ᱥᱟᱱᱛᱟᱲᱤ᱾ ᱚᱱᱚᱲᱦᱮᱸ᱿ "
+        "اردو\u06d4 سوال؟ تعجب! فہرست، شق؛ کالن: وقف…"
+    )
+    task = AudioTask(data={"pred_text": text, "_skipme": ""})
+
+    result = stage.process(task)
+
+    assert result.data["cleaned_text"] == (
+        "हिंदी. संस्कृत. प्रश्न? विराम... "
+        "ꯃꯤꯇꯩ. ꯑꯥꯍꯪ? ᱥᱟᱱᱛᱟᱲᱤ. ᱚᱱᱚᱲᱦᱮᱸ. "
+        "اردو\u06d4 سوال؟ تعجب! فہرست، شق؛ کالن: وقف…"
+    )
+    assert result.data["_skipme"] == ""
+
+
+def test_granary_common_whitelist_preserves_added_script_blocks() -> None:
+    stage = RegexSubstitutionStage(regex_params_yaml=str(GRANARY_COMMON_RULES))
+    stage.setup()
+    text = "ଓଡ଼ିଆ संस्कृत\u1cd0 ࢠ ꫠ ꯃꯤꯇꯩ ᱥᱟᱱᱛᱟᱲᱤ जेनʼरिन اردو\u200f"
     task = AudioTask(data={"pred_text": text, "_skipme": ""})
 
     result = stage.process(task)
