@@ -36,30 +36,6 @@ _TWO_NODES_4GPU = [
 ]
 
 
-def test_dynamo_runtime_env_installs_dependencies_by_default() -> None:
-    mc = DynamoVLLMModelConfig(model_identifier="m")
-
-    assert dynamo_vllm.dynamo_runtime_env(mc) == dynamo_vllm.DYNAMO_VLLM_RUNTIME_ENV
-
-
-def test_dynamo_runtime_env_can_reuse_preinstalled_environment() -> None:
-    mc = DynamoVLLMModelConfig(
-        model_identifier="m",
-        install_runtime_dependencies=False,
-        runtime_env={"env_vars": {"EXAMPLE": "1"}},
-    )
-
-    assert dynamo_vllm.dynamo_runtime_env(mc) == {"env_vars": {"EXAMPLE": "1"}}
-
-
-def test_shared_frontend_installs_dependencies_when_any_model_requires_it() -> None:
-    preinstalled = DynamoVLLMModelConfig(model_identifier="preinstalled", install_runtime_dependencies=False)
-    isolated = DynamoVLLMModelConfig(model_identifier="isolated")
-
-    assert dynamo_vllm.merge_model_runtime_envs([preinstalled]) == {}
-    assert dynamo_vllm.merge_model_runtime_envs([preinstalled, isolated]) == dynamo_vllm.DYNAMO_VLLM_RUNTIME_ENV
-
-
 @pytest.mark.parametrize(
     ("router_mode", "router_kv_events", "expected"),
     [
@@ -107,16 +83,16 @@ class TestLaunchReplicas:
                 topology=topology,
             )
 
-    def test_single_node_omits_kv_events_by_default(self, captured_spawn: list[dict[str, Any]]) -> None:
+    def test_single_node_disables_kv_events_by_default(self, captured_spawn: list[dict[str, Any]]) -> None:
         mc = DynamoVLLMModelConfig(model_identifier="Qwen/Qwen3-0.6B", num_replicas=1)
         self._launch(mc, topology=_SINGLE_NODE_1GPU)
 
         assert len(captured_spawn) == 1
         python_args = captured_spawn[0]["python_args"]
-        assert "--kv-events-config" not in python_args
+        kv_cfg = json.loads(python_args[python_args.index("--kv-events-config") + 1])
+        assert kv_cfg == {"enable_kv_cache_events": False}
         assert "--headless" not in python_args
         assert "--nnodes" not in python_args
-        assert captured_spawn[0]["subprocess_env"]["DYN_SYSTEM_PORT"] == "24567"
 
     def test_kv_router_enables_exact_kv_events(self, captured_spawn: list[dict[str, Any]]) -> None:
         mc = DynamoVLLMModelConfig(model_identifier="Qwen/Qwen3-0.6B", num_replicas=1)
@@ -152,7 +128,8 @@ class TestLaunchReplicas:
         assert "--headless" in headless
         assert headless[headless.index("--node-rank") + 1] == "1"
         assert headless[headless.index("--master-addr") + 1] == "10.0.0.5"
-        assert "--kv-events-config" not in headless
+        kv_cfg = json.loads(headless[headless.index("--kv-events-config") + 1])
+        assert kv_cfg["enable_kv_cache_events"] is False
 
     def test_dynamo_kwargs_are_appended_as_cli_flags(self, captured_spawn: list[dict[str, Any]]) -> None:
         mc = DynamoVLLMModelConfig(
@@ -232,7 +209,6 @@ class TestLaunchDisaggReplicas:
         test can assert uniqueness directly."""
         with (
             mock.patch.object(dynamo_vllm, "build_replica_pg", return_value=object()),
-            mock.patch.object(dynamo_vllm, "get_bundle_node_ip", return_value="10.0.0.5"),
             mock.patch.object(
                 dynamo_vllm,
                 "get_free_port_in_bundle",

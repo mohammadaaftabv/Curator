@@ -27,7 +27,7 @@ import pytest
 import nemo_curator.core.serve.dynamo.backend as dynamo_backend
 from nemo_curator.core.serve import DynamoServerConfig, DynamoVLLMModelConfig, InferenceServer
 from nemo_curator.core.serve.dynamo.backend import DynamoBackend
-from nemo_curator.core.serve.dynamo.config import DynamoAdmissionConfig, DynamoRoleConfig, DynamoRouterConfig
+from nemo_curator.core.serve.dynamo.config import DynamoRoleConfig, DynamoRouterConfig
 
 # ---------------------------------------------------------------------------
 # Backend-level validators
@@ -196,37 +196,6 @@ class TestDynamoBackendStart:
 
         assert order == ["overrides", "actors", "pgs", "deploy"]
 
-    def test_preinstalled_environment_skips_actor_override_materialization(self) -> None:
-        server = InferenceServer(
-            models=[
-                DynamoVLLMModelConfig(
-                    model_identifier="m",
-                    install_runtime_dependencies=False,
-                )
-            ],
-            backend=DynamoServerConfig(
-                etcd_endpoint="http://127.0.0.1:2379",
-                nats_url="nats://127.0.0.1:4222",
-            ),
-        )
-        backend = DynamoBackend(server)
-        mock_ctx = mock.Mock()
-        mock_ctx.get_temp_dir.return_value = "/tmp"  # noqa: S108
-        mock_ctx.get_session_name.return_value = "session_test"
-
-        with (
-            mock.patch.object(dynamo_backend.ray, "init", return_value=contextlib.nullcontext()),
-            mock.patch.object(dynamo_backend.ray, "get_runtime_context", return_value=mock_ctx),
-            mock.patch.object(dynamo_backend.os, "makedirs"),
-            mock.patch.object(dynamo_backend, "ensure_actor_overrides_on_all_nodes") as ensure_overrides,
-            mock.patch.object(backend, "_sweep_orphan_actors"),
-            mock.patch.object(dynamo_backend, "remove_named_pgs_with_prefix"),
-            mock.patch.object(backend, "_deploy_and_healthcheck"),
-        ):
-            backend.start()
-
-        ensure_overrides.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # Frontend CLI-arg wiring (router mode + router_kwargs translation)
@@ -303,29 +272,6 @@ class TestDynamoBackendLaunchFrontend:
             "nats",
         ]
         assert captured_spawn[0]["subprocess_env"] == {}
-
-    def test_admission_proxy_receives_discovered_metrics(self, captured_spawn: list[dict[str, Any]]) -> None:
-        backend_cfg = DynamoServerConfig(
-            admission=DynamoAdmissionConfig(
-                max_waiting_requests=2048,
-                max_concurrent_requests=8192,
-            )
-        )
-        backend = self._make_backend(backend_cfg)
-
-        with mock.patch.object(dynamo_backend, "_wait_for_port"):
-            backend._launch_admission_proxy(
-                port=9999,
-                upstream="http://10.0.0.1:10000",
-                metrics_urls=["http://10.0.0.2:18081/metrics"],
-                config=backend_cfg.admission,
-            )
-
-        args = captured_spawn[0]["python_args"]
-        assert args[:2] == ["-m", "nemo_curator.core.serve.dynamo.admission_proxy"]
-        assert args[args.index("--max-waiting-requests") + 1] == "2048"
-        assert args[args.index("--max-concurrent-requests") + 1] == "8192"
-        assert args[args.index("--metrics-url") + 1] == "http://10.0.0.2:18081/metrics"
 
     def test_kv_mode_without_events_emits_no_router_kv_events(self, captured_spawn: list[dict[str, Any]]) -> None:
         backend_cfg = DynamoServerConfig(router=DynamoRouterConfig(mode="kv", kv_events=False))

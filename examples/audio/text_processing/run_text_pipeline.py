@@ -92,18 +92,16 @@ from nemo_curator.stages.audio.alm.sharded_manifest_writer import ShardedManifes
 from nemo_curator.stages.audio.text_filtering.acoustic_distractor import AcousticDistractorStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_extraction import ContextualASRExtractionStage
 from nemo_curator.stages.audio.text_filtering.contextual_asr_prompt_variant import ContextualASRPromptVariantStage
+from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.instruction_packer import InstructionPackerStage
 from nemo_curator.stages.audio.text_filtering.llm_language_verification import LLMLanguageVerificationStage
 from nemo_curator.stages.audio.text_filtering.remote_contextual_asr_extraction import (
     RemoteContextualASRExtractionStage,
 )
-from nemo_curator.stages.audio.text_filtering.fused_remote_text_llm_stage import FusedRemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.remote_recover_entities import RemoteRecoverEntitiesStage
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
-from nemo_curator.stages.audio.text_filtering.sampling import parse_stage_sampling_config, sampling_for_stage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 from nemo_curator.stages.resources import Resources
-
 
 _PROMPT_DIR = (
     Path(__file__).resolve().parent.parent.parent.parent
@@ -127,10 +125,24 @@ _CODE_SWITCHING_PROMPT = _PROMPT_DIR / "code_switching_prompt.md"
 _SPEECH_QA_PROMPT = _PROMPT_DIR / "speech_qa_prompt.md"
 _LANGUAGE_ID_PROMPT = _PROMPT_DIR / "language_id_prompt.md"
 _RECOVER_ENTITIES_PROMPT = _PROMPT_DIR / "recover_entities_prompt.md"
+_SAMPLING_STAGE_KEYS = frozenset(
+    {
+        "recover_entities",
+        "pnc",
+        "language_id",
+        "tn",
+        "itn",
+        "itn_no_disfluencies",
+        "captioning",
+        "context_asr",
+        "code_switching",
+        "speech_qa",
+    }
+)
 
 
-def _json_object(value: str) -> dict:
-    """Argparse converter for vLLM JSON-object flags."""
+def _parse_stage_sampling_config(value: str) -> dict[str, dict[str, float]]:
+    """Parse and validate per-stage temperature/top-p overrides."""
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError as exc:
@@ -139,10 +151,45 @@ def _json_object(value: str) -> dict:
     if not isinstance(parsed, dict):
         msg = f"Expected a JSON object, got {type(parsed).__name__}"
         raise argparse.ArgumentTypeError(msg)
-    return parsed
+
+    unknown_stages = set(parsed) - _SAMPLING_STAGE_KEYS
+    if unknown_stages:
+        msg = f"Unknown sampling stage(s): {', '.join(sorted(unknown_stages))}"
+        raise argparse.ArgumentTypeError(msg)
+
+    normalized: dict[str, dict[str, float]] = {}
+    for stage, config in parsed.items():
+        normalized[stage] = _normalize_stage_sampling_config(stage, config)
+    return normalized
 
 
-def _sampling_for_stage(
+def _normalize_stage_sampling_config(stage: str, config: object) -> dict[str, float]:
+    """Validate and normalize one stage's sampling overrides."""
+    if not isinstance(config, dict):
+        msg = f"Sampling config for {stage!r} must be a JSON object"
+        raise argparse.ArgumentTypeError(msg)
+    unknown_fields = set(config) - {"temperature", "top_p"}
+    if unknown_fields:
+        msg = f"Unknown sampling field(s) for {stage!r}: {', '.join(sorted(unknown_fields))}"
+        raise argparse.ArgumentTypeError(msg)
+
+    normalized: dict[str, float] = {}
+    for field_name, field_value in config.items():
+        if isinstance(field_value, bool) or not isinstance(field_value, (int, float)):
+            msg = f"{stage}.{field_name} must be a number"
+            raise argparse.ArgumentTypeError(msg)
+        numeric_value = float(field_value)
+        if field_name == "temperature" and numeric_value < 0:
+            msg = f"{stage}.temperature must be >= 0"
+            raise argparse.ArgumentTypeError(msg)
+        if field_name == "top_p" and not 0 < numeric_value <= 1:
+            msg = f"{stage}.top_p must be in (0, 1]"
+            raise argparse.ArgumentTypeError(msg)
+        normalized[field_name] = numeric_value
+    return normalized
+
+
+def _resolve_stage_sampling(
     args: argparse.Namespace,
     stage: str,
     *,
@@ -150,12 +197,17 @@ def _sampling_for_stage(
     default_top_p: float | None = None,
 ) -> dict[str, float]:
     """Resolve a stage override over its backwards-compatible defaults."""
-    return sampling_for_stage(
-        stage_sampling_config=args.stage_sampling_config,
-        stage=stage,
-        default_temperature=args.temperature if default_temperature is None else default_temperature,
-        default_top_p=args.top_p if default_top_p is None else default_top_p,
-    )
+    if stage not in _SAMPLING_STAGE_KEYS:
+        msg = f"Unknown sampling stage: {stage!r}"
+        raise ValueError(msg)
+
+    resolved_default_temperature = args.temperature if default_temperature is None else default_temperature
+    resolved_default_top_p = args.top_p if default_top_p is None else default_top_p
+    return {
+        "temperature": resolved_default_temperature,
+        "top_p": resolved_default_top_p,
+        **args.stage_sampling_config.get(stage, {}),
+    }
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
@@ -585,7 +637,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     ap.add_argument(
         "--stage_sampling_config",
-        type=parse_stage_sampling_config,
+        type=_parse_stage_sampling_config,
         default={},
         metavar="JSON",
         help=(
@@ -598,10 +650,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
     )
     ap.add_argument(
         "--speculative_config",
-        type=_json_object,
+        type=str,
         default=None,
         help=(
-            "JSON object forwarded to vLLM --speculative-config, for example "
+            "Value forwarded verbatim to vLLM --speculative-config, for example "
             '\'{"model":"google/gemma-4-31B-it-assistant","num_speculative_tokens":4}\'.'
         ),
     )
@@ -844,6 +896,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             DynamoVLLMModelConfig,
             InferenceServer,
         )
+
         # Count GPUs without Ray (ray.available_resources() requires a running
         # cluster). torch.cuda honours CUDA_VISIBLE_DEVICES. Start the cluster
         # exposing those GPUs BEFORE the backend deploys; the server is torn down
@@ -1025,7 +1078,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                     else args.num_workers
                 ),
                 batch_size=args.batch_size,
-                **_sampling_for_stage(
+                **_resolve_stage_sampling(
                     args,
                     "recover_entities",
                     default_temperature=0.0,
@@ -1056,7 +1109,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 prompt_file=pnc_prompt,
                 text_key=pnc_input_key,
                 output_text_key=args.pnc_output_key,
-                **_sampling_for_stage(args, "pnc"),
+                **_resolve_stage_sampling(args, "pnc"),
                 **shared_model_kwargs,
             )
         )
@@ -1073,7 +1126,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=langid_text_key,
             output_text_key="llm_language_prediction",
             enable_validation=False,
-            **_sampling_for_stage(args, "language_id"),
+            **_resolve_stage_sampling(args, "language_id"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1097,7 +1150,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             output_text_key=args.tn_output_key,
             enable_validation=not args.disable_tn_validation,
             validation_mode="tn",
-            **_sampling_for_stage(args, "tn"),
+            **_resolve_stage_sampling(args, "tn"),
             **shared_model_kwargs,
         )
         # TN runs serially (before the fused stage) so tn_raw is available to the downstream
@@ -1116,7 +1169,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             prompt_file=itn_prompt,
             text_key=itn_input_key,
             output_text_key=args.itn_output_key,
-            **_sampling_for_stage(args, "itn"),
+            **_resolve_stage_sampling(args, "itn"),
             **shared_model_kwargs,
         )
         # Fuse only when reading pnc_text; tn_raw input runs post-fused.
@@ -1138,7 +1191,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 prompt_file=itn_prompt,
                 text_key=itn_input_key,
                 output_text_key=args.itn_output_key,
-                **_sampling_for_stage(args, "itn"),
+                **_resolve_stage_sampling(args, "itn"),
                 **shared_model_kwargs,
             )
             # Same placement rule as the ITN block above.
@@ -1155,7 +1208,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=args.itn_output_key,
             output_text_key=args.itn_no_disfluencies_output_key,
             max_deletion_ratio=0.5,
-            **_sampling_for_stage(args, "itn_no_disfluencies"),
+            **_resolve_stage_sampling(args, "itn_no_disfluencies"),
             **shared_model_kwargs,
         )
         # DisfluencyRemoval reads itn_raw from the fused stage — must follow it.
@@ -1172,7 +1225,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.captioning_output_key,
             enable_validation=False,
-            **_sampling_for_stage(args, "captioning"),
+            **_resolve_stage_sampling(args, "captioning"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1205,9 +1258,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 max_num_seqs=args.max_num_seqs,
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 kv_cache_dtype=args.kv_cache_dtype,
-                num_workers_override=args.context_asr_num_workers if args.context_asr_num_workers is not None else args.num_workers,
+                num_workers_override=args.context_asr_num_workers
+                if args.context_asr_num_workers is not None
+                else args.num_workers,
                 batch_size=args.batch_size,
-                **_sampling_for_stage(
+                **_resolve_stage_sampling(
                     args,
                     "context_asr",
                     default_temperature=0.1,
@@ -1215,8 +1270,11 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 ),
                 **{
                     **remote_kwargs,
-                    **({"max_concurrent_requests": args.context_asr_max_concurrent_requests}
-                       if args.context_asr_max_concurrent_requests is not None and remote_kwargs else {}),
+                    **(
+                        {"max_concurrent_requests": args.context_asr_max_concurrent_requests}
+                        if args.context_asr_max_concurrent_requests is not None and remote_kwargs
+                        else {}
+                    ),
                 },
             )
         )
@@ -1268,7 +1326,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.code_switching_output_key,
             enable_validation=False,
-            **_sampling_for_stage(args, "code_switching"),
+            **_resolve_stage_sampling(args, "code_switching"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1284,7 +1342,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             text_key=post_tn_text_key,
             output_text_key=args.speech_qa_output_key,
             enable_validation=False,
-            **_sampling_for_stage(args, "speech_qa"),
+            **_resolve_stage_sampling(args, "speech_qa"),
             **shared_model_kwargs,
         )
         if use_fusing:
@@ -1359,8 +1417,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             except Exception:
                 failed_batches += 1
                 logger.exception(
-                    f"Batch {_bi + 1}/{len(shard_batches)} failed; continuing "
-                    "(incomplete shards resume on re-run)."
+                    f"Batch {_bi + 1}/{len(shard_batches)} failed; continuing (incomplete shards resume on re-run)."
                 )
                 continue
             # Batch drained cleanly → finalize .done deterministically for its shards.

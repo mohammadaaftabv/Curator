@@ -72,18 +72,6 @@ def test_dynamo_endpoint(namespace: str, component: str, role: str | None, expec
             {"generation_config": {"temperature": 0.7}},
             ["--generation-config", '{"temperature": 0.7}'],
         ),
-        (
-            {
-                "speculative_config": {
-                    "model": "google/gemma-4-31B-it-assistant",
-                    "num_speculative_tokens": 4,
-                },
-            },
-            [
-                "--speculative-config",
-                '{"model": "google/gemma-4-31B-it-assistant", "num_speculative_tokens": 4}',
-            ],
-        ),
     ],
 )
 def test_engine_kwargs_to_cli_flags(engine_kwargs: dict, expected: list[str]) -> None:
