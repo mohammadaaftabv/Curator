@@ -309,7 +309,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help="Path to captioning prompt file. Defaults to bundled captioning_prompt.md.",
     )
     ap.add_argument(
-        "--pnc_prompt_file", type=str, default=None, help="Path to PnC prompt file. Defaults to bundled pnc_prompt.md."
+        "--pnc_prompt_file",
+        type=str,
+        default=None,
+        help=(
+            "Path to PnC prompt file. Defaults to the shared bundled pnc_prompt.md; "
+            "use bundled pnc_prompt_indic.md for the row-scoped Indic prompt."
+        ),
     )
     ap.add_argument(
         "--pnc_language_rules_file",

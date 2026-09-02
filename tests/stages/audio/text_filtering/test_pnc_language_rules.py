@@ -51,11 +51,18 @@ def test_bundled_language_rules_follow_script_punctuation_policy() -> None:
     assert "ellipsis `…`" in rules["ks"]
 
 
-def test_pnc_prompt_uses_one_language_rules_placeholder() -> None:
-    prompt = (PROMPT_DIR / "pnc_prompt.md").read_text(encoding="utf-8")
+def test_indic_pnc_prompt_uses_one_language_rules_placeholder() -> None:
+    prompt = (PROMPT_DIR / "pnc_prompt_indic.md").read_text(encoding="utf-8")
 
     assert prompt.count("{language_rules}") == 1
     assert "For Assamese, Bengali" not in prompt
+
+
+def test_shared_pnc_prompt_remains_language_general() -> None:
+    prompt = (PROMPT_DIR / "pnc_prompt.md").read_text(encoding="utf-8")
+
+    assert "{language_rules}" not in prompt
+    assert "Add punctuation and capitalization" in prompt
 
 
 def test_text_stage_renders_only_active_language_rule() -> None:
@@ -86,7 +93,7 @@ def test_remote_stage_uses_same_row_scoped_rendering() -> None:
 @pytest.mark.parametrize("language", PNC_LANGUAGE_CODES)
 def test_bundled_render_contains_only_active_language_guidance(language: str) -> None:
     stage = TextLLMStage(
-        prompt_file=str(PROMPT_DIR / "pnc_prompt.md"),
+        prompt_file=str(PROMPT_DIR / "pnc_prompt_indic.md"),
         language_rules=load_pnc_language_rules(),
     )
     stage._system_prompt = stage._resolve_prompt()
