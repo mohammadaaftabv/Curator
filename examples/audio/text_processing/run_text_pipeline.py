@@ -117,6 +117,7 @@ _TN_PROMPT = _PROMPT_DIR / "tn_prompt.md"
 _CORRECTION_PROMPT = _PROMPT_DIR / "correction_prompt.md"
 _CAPTIONING_PROMPT = _PROMPT_DIR / "captioning_prompt.md"
 _PNC_PROMPT = _PROMPT_DIR / "pnc_prompt.md"
+_PNC_INDIC_PROMPT = _PROMPT_DIR / "pnc_prompt_indic.md"
 _PNC_LANGUAGE_RULES = _PROMPT_DIR / "pnc_language_rules.json"
 _CONTEXT_ASR_PROMPT = _PROMPT_DIR / "contextual_asr_prompt.md"
 
@@ -127,6 +128,12 @@ _CODE_SWITCHING_PROMPT = _PROMPT_DIR / "code_switching_prompt.md"
 _SPEECH_QA_PROMPT = _PROMPT_DIR / "speech_qa_prompt.md"
 _LANGUAGE_ID_PROMPT = _PROMPT_DIR / "language_id_prompt.md"
 _RECOVER_ENTITIES_PROMPT = _PROMPT_DIR / "recover_entities_prompt.md"
+
+
+def _resolve_pnc_prompt_file(custom_prompt_file: str | None, *, use_indic_prompt: bool) -> str:
+    if use_indic_prompt:
+        return str(_PNC_INDIC_PROMPT)
+    return custom_prompt_file or str(_PNC_PROMPT)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
@@ -308,14 +315,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=None,
         help="Path to captioning prompt file. Defaults to bundled captioning_prompt.md.",
     )
-    ap.add_argument(
+    pnc_prompt_group = ap.add_mutually_exclusive_group()
+    pnc_prompt_group.add_argument(
         "--pnc_prompt_file",
         type=str,
         default=None,
-        help=(
-            "Path to PnC prompt file. Defaults to the shared bundled pnc_prompt.md; "
-            "use bundled pnc_prompt_indic.md for the row-scoped Indic prompt."
-        ),
+        help="Path to a custom PnC prompt file. Defaults to the shared bundled pnc_prompt.md.",
+    )
+    pnc_prompt_group.add_argument(
+        "--use_indic_pnc_prompt",
+        action="store_true",
+        help="Use the bundled row-scoped Indic P3 V6 prompt (pnc_prompt_indic.md).",
     )
     ap.add_argument(
         "--pnc_language_rules_file",
@@ -841,7 +851,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
     itn_prompt = args.itn_prompt_file or str(_ITN_PROMPT)
     itn_no_disfl_prompt = args.itn_no_disfluencies_prompt_file or str(_CORRECTION_PROMPT)
     captioning_prompt = args.captioning_prompt_file or str(_CAPTIONING_PROMPT)
-    pnc_prompt = args.pnc_prompt_file or str(_PNC_PROMPT)
+    pnc_prompt = _resolve_pnc_prompt_file(
+        args.pnc_prompt_file,
+        use_indic_prompt=args.use_indic_pnc_prompt,
+    )
     pnc_language_rules = None
     if args.enable_pnc and "{language_rules}" in Path(pnc_prompt).read_text(encoding="utf-8"):
         rules_file = args.pnc_language_rules_file or str(_PNC_LANGUAGE_RULES)

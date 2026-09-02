@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -23,13 +25,64 @@ from nemo_curator.stages.audio.text_filtering.pnc_language_rules import (
 from nemo_curator.stages.audio.text_filtering.remote_text_llm_stage import RemoteTextLLMStage
 from nemo_curator.stages.audio.text_filtering.text_llm_stage import TextLLMStage
 
-PROMPT_DIR = (
-    Path(__file__).parents[4] / "nemo_curator" / "stages" / "audio" / "text_filtering" / "prompts"
-)
+PROMPT_DIR = Path(__file__).parents[4] / "nemo_curator" / "stages" / "audio" / "text_filtering" / "prompts"
+RUN_TEXT_PIPELINE = Path(__file__).parents[4] / "examples" / "audio" / "text_processing" / "run_text_pipeline.py"
+
+_RUNNER_SPEC = importlib.util.spec_from_file_location("curator_run_text_pipeline", RUN_TEXT_PIPELINE)
+if _RUNNER_SPEC is None or _RUNNER_SPEC.loader is None:
+    message = f"Unable to load {RUN_TEXT_PIPELINE}"
+    raise RuntimeError(message)
+_RUNNER = importlib.util.module_from_spec(_RUNNER_SPEC)
+_RUNNER_SPEC.loader.exec_module(_RUNNER)
 
 ARABIC_LANGUAGE_CODES = {"ks", "ur"}
 NON_ARABIC_PUNCTUATION = (".", "?", "!", ",", ";", ":", "...")
 ARABIC_PUNCTUATION = ("\u06d4", "\u061f", "!", "\u060c", "\u061b", ":", "…")
+
+
+def _parse_pnc_cli_args(*extra_args: str) -> argparse.Namespace:
+    return _RUNNER._build_arg_parser().parse_args(
+        ["--input_manifest", "input.jsonl", "--output_dir", "output", *extra_args]
+    )
+
+
+def test_pnc_prompt_cli_defaults_to_shared_prompt() -> None:
+    args = _parse_pnc_cli_args()
+
+    assert _RUNNER._resolve_pnc_prompt_file(
+        args.pnc_prompt_file,
+        use_indic_prompt=args.use_indic_pnc_prompt,
+    ) == str(_RUNNER._PNC_PROMPT)
+
+
+def test_pnc_prompt_cli_selects_bundled_indic_prompt() -> None:
+    args = _parse_pnc_cli_args("--use_indic_pnc_prompt")
+
+    assert _RUNNER._resolve_pnc_prompt_file(
+        args.pnc_prompt_file,
+        use_indic_prompt=args.use_indic_pnc_prompt,
+    ) == str(_RUNNER._PNC_INDIC_PROMPT)
+
+
+def test_pnc_prompt_cli_preserves_custom_prompt_path() -> None:
+    args = _parse_pnc_cli_args("--pnc_prompt_file", "custom-pnc.md")
+
+    assert (
+        _RUNNER._resolve_pnc_prompt_file(
+            args.pnc_prompt_file,
+            use_indic_prompt=args.use_indic_pnc_prompt,
+        )
+        == "custom-pnc.md"
+    )
+
+
+def test_pnc_prompt_cli_rejects_bundled_and_custom_prompt_together() -> None:
+    with pytest.raises(SystemExit):
+        _parse_pnc_cli_args(
+            "--use_indic_pnc_prompt",
+            "--pnc_prompt_file",
+            "custom-pnc.md",
+        )
 
 
 def test_bundled_language_rules_have_exact_target_codes() -> None:
