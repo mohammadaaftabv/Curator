@@ -268,6 +268,46 @@ def test_bundled_examples_preserve_source_example_arity_and_code_switching() -> 
         assert re.findall(r"[a-z]+", url_spoken) == ["example", "com", "pricing", "john", "gmail", "com"]
 
 
+def test_reported_language_corrections_are_applied() -> None:
+    examples = load_tn_language_examples()
+
+    assert _table_rows(examples["gu"])["Ordinal"][0] == "1લું / 21મું / 50મું"
+    assert "उनान्सय सेन्ट" in _table_rows(examples["ne"])["Money"][1]
+
+    punjabi_money = _table_rows(examples["pa"])["Money"][1]
+    assert "ਉਣਿੰਜਾ ਡਾਲਰ" in punjabi_money
+    assert "ਨੜਿੰਨਵੇਂ ਸੈਂਟ" in punjabi_money
+
+    assert _table_rows(examples["doi"])["Ordinal"][0] == "1मां / 21मां / 50मां"
+
+    kashmiri = examples["ks"]
+    assert "پَنٛژٲہیُٛم" in kashmiri
+    assert "سَتہٕ تٲجی" in kashmiri
+    assert kashmiri.count("پؠٹھٕ") == 2
+    for stale_form in ("پَنٛژاہُیٛم", "سَتتٲجی", "پیٹھٕ"):
+        assert stale_form not in kashmiri
+
+    maithili_titles = _table_rows(examples["mai"])["Titles"][1]
+    assert "प्रोफेसर जोन्स" in maithili_titles
+    assert "अध्यापक जोन्स" not in maithili_titles
+
+    manipuri = examples["mni"]
+    assert manipuri.count("ꯅꯤꯝꯐꯨ") == 3
+    assert manipuri.count("ꯊꯣꯢ") == 6
+    assert "ꯅꯤꯐꯨ" not in manipuri
+    assert "ꯊꯣꯏ" not in manipuri
+
+    santali_cardinals = _table_rows(examples["sat"])["Cardinal"][1].split(" / ")
+    assert santali_cardinals[2] == "ᱵᱟᱨ ᱦᱟᱡᱟᱨ ᱵᱟᱨ ᱜᱮᱞ ᱯᱩᱱ"
+
+    odia_times = _table_rows(examples["or"])["Time"][1].split(" / ")
+    assert odia_times[0] == "ତିନିଟା ପାଞ୍ଚ ମିନିଟ୍ ପି ଏମ୍"
+    assert odia_times[2] == "ଏକଟା ପଞ୍ଚଚାଳିଶ ମିନିଟ୍"
+
+    telugu_regnal = _table_rows(examples["te"])["Roman num."][1].split(" / ")
+    assert telugu_regnal[0] == "ఎనిమిదవ హెన్రీ రాజు"
+
+
 def test_every_spoken_example_uses_its_configured_script() -> None:
     examples = load_tn_language_examples()
 
