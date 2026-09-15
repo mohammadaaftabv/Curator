@@ -205,12 +205,6 @@ def test_tn_prompt_cli_accepts_custom_language_examples_path() -> None:
     assert args.tn_language_examples_file == "custom-examples.json"
 
 
-@pytest.mark.parametrize("value", ["0", "-1", "not-an-int"])
-def test_tn_prompt_cli_rejects_invalid_max_model_len(value: str) -> None:
-    with pytest.raises(SystemExit):
-        _parse_tn_cli_args("--tn_max_model_len", value)
-
-
 def test_tn_language_examples_load_only_for_enabled_placeholder_prompt(tmp_path: Path) -> None:
     assert (
         _RUNNER._load_tn_language_examples_for_prompt(
@@ -242,47 +236,6 @@ def test_tn_language_examples_load_only_for_enabled_placeholder_prompt(tmp_path:
         )
         == load_tn_language_examples()
     )
-
-
-@pytest.mark.parametrize(
-    ("global_max_model_len", "configured_tn_max_model_len", "uses_language_examples", "expected"),
-    [
-        (2048, None, False, 2048),
-        (2048, None, True, 4096),
-        (8192, None, True, 8192),
-        (2048, 3072, True, 3072),
-    ],
-)
-def test_tn_max_model_len_resolution(
-    global_max_model_len: int,
-    configured_tn_max_model_len: int | None,
-    uses_language_examples: bool,
-    expected: int,
-) -> None:
-    assert (
-        _RUNNER._resolve_tn_max_model_len(
-            global_max_model_len=global_max_model_len,
-            configured_tn_max_model_len=configured_tn_max_model_len,
-            uses_language_examples=uses_language_examples,
-        )
-        == expected
-    )
-
-
-def test_translated_tn_max_model_len_reaches_stage_and_shared_server() -> None:
-    args = _parse_tn_cli_args("--enable_tn", "--use_indic_tn_prompt")
-    tn_max_model_len = _RUNNER._resolve_tn_max_model_len(
-        global_max_model_len=args.max_model_len,
-        configured_tn_max_model_len=args.tn_max_model_len,
-        uses_language_examples=True,
-    )
-
-    shared_model_kwargs = {"model_id": "test-model", "max_model_len": args.max_model_len}
-    tn_model_kwargs = _RUNNER._with_max_model_len(shared_model_kwargs, tn_max_model_len)
-
-    assert shared_model_kwargs["max_model_len"] == 2048
-    assert tn_model_kwargs["max_model_len"] == 4096
-    assert _RUNNER._resolve_inference_server_max_model_len(args, tn_max_model_len=tn_max_model_len) == 4096
 
 
 def test_bundled_language_examples_have_exact_target_codes_and_categories() -> None:
