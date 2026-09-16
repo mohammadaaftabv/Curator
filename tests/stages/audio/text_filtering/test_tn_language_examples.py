@@ -305,7 +305,7 @@ def test_reported_language_corrections_are_applied() -> None:
     assert odia_times[2] == "ଏକଟା ପଞ୍ଚଚାଳିଶ ମିନିଟ୍"
 
     telugu_regnal = _table_rows(examples["te"])["Roman num."][1].split(" / ")
-    assert telugu_regnal[0] == "ఎనిమిదవ హెన్రీ రాజు"
+    assert telugu_regnal[0] == "రాజు హెన్రీ ఎనిమిదవ"
 
 
 def test_every_spoken_example_uses_its_configured_script() -> None:
@@ -345,6 +345,8 @@ def test_indic_tn_prompt_uses_one_language_rules_placeholder() -> None:
     prompt = (PROMPT_DIR / "tn_prompt_indic.md").read_text(encoding="utf-8")
 
     assert prompt.count("{language_rules}") == 1
+    assert "natural cardinal or grouped-number reading" in prompt
+    assert "zip/house numbers digit by digit" not in prompt
     for source_example in ("fourteen / one thousand", "um, uh", "go- going", "gonna", "oh eleven", "One Direction"):
         assert source_example not in prompt
 
@@ -354,6 +356,8 @@ def test_shared_tn_prompt_remains_language_general() -> None:
 
     assert "{language_rules}" not in prompt
     assert "fourteen / one thousand" in prompt
+    assert "natural cardinal or grouped-number readings" in prompt
+    assert "zip/house numbers → digit-by-digit" not in prompt
 
 
 def test_text_stage_renders_only_active_language_examples() -> None:

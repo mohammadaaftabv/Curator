@@ -19,7 +19,7 @@ Return ONLY normalized text. No explanations or extra formatting.
 Additional rules:
 - In URLs, emails, phones, and similar structured spans, render structural symbols (`.`, `@`, `/`, `:`, `-`) with the spoken forms shown in the active-language examples.
 - Keep acronyms in their natural spoken form; do not expand unrelated abbreviations.
-- For `0` in phone/time contexts, use one of the natural forms shown in the active-language examples; render zip/house numbers digit by digit when denormalizing.
+- For `0` in phone/time contexts, use one of the natural forms shown in the active-language examples; render zip/house numbers with the active language's natural cardinal or grouped-number reading when denormalizing.
 
 ## Ambiguity
 
