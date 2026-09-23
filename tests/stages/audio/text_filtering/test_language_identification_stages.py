@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pytest
 
 from nemo_curator.stages.audio.text_filtering.fasttext_language_identification import (
@@ -151,6 +152,48 @@ def test_config_routing_runs_exactly_one_backend_per_row() -> None:
     assert all(task.data["additional_notes"] == {"LanguageID": "applied (modified)"} for task in tasks)
 
 
+@pytest.mark.parametrize(
+    ("stage", "model", "model_labels", "source_languages", "expected_predictions"),
+    [
+        (
+            FastTextLanguageIdentificationStage(model_path="unused.bin"),
+            _FakeFastTextModel(["__label__hi", "__label__mr"], [0.9, 0.8]),
+            {"hi", "mr"},
+            ["hi", "mr"],
+            ["hi", "mr"],
+        ),
+        (
+            IndicLIDLanguageIdentificationStage(model_path="unused.bin"),
+            _FakeFastTextModel(["__label__hin_Deva", "__label__mar_Deva"], [0.9, 0.8]),
+            {"hin_Deva", "mar_Deva"},
+            ["hi", "mr"],
+            ["hi", "mr"],
+        ),
+    ],
+)
+def test_process_batch_accepts_ray_numpy_object_array(
+    stage: FastTextLanguageIdentificationStage | IndicLIDLanguageIdentificationStage,
+    model: _FakeFastTextModel,
+    model_labels: set[str],
+    source_languages: list[str],
+    expected_predictions: list[str],
+) -> None:
+    _attach_model(stage, model, model_labels)
+    tasks = np.asarray(
+        [
+            AudioTask(data={"abbreviated_text": "नमस्ते", "source_lang": language, "_skipme": ""})
+            for language in source_languages
+        ],
+        dtype=object,
+    )
+
+    result = stage.process_batch(tasks)
+
+    assert isinstance(result, list)
+    assert result == tasks.tolist()
+    assert [task.data["llm_language_prediction"] for task in result] == expected_predictions
+
+
 def test_config_routing_fails_closed_for_unmapped_language() -> None:
     stage = IndicLIDLanguageIdentificationStage(
         model_path="unused.bin",
@@ -208,6 +251,24 @@ def test_empty_batch_does_not_load_model(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(stage, "setup", _unexpected_setup)
 
     assert stage.process_batch([]) == []
+
+
+@pytest.mark.parametrize(
+    "stage_type",
+    [FastTextLanguageIdentificationStage, IndicLIDLanguageIdentificationStage],
+)
+def test_empty_ray_numpy_object_array_does_not_load_model(
+    stage_type: type[FastTextLanguageIdentificationStage | IndicLIDLanguageIdentificationStage],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stage = stage_type(model_path="unused.bin")
+
+    def _unexpected_setup() -> None:
+        pytest.fail("setup must not run for an empty Ray batch")
+
+    monkeypatch.setattr(stage, "setup", _unexpected_setup)
+
+    assert stage.process_batch(np.asarray([], dtype=object)) == []
 
 
 def test_flagged_and_empty_rows_match_text_llm_stage_edits() -> None:

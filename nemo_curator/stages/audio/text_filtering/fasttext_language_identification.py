@@ -115,7 +115,8 @@ class _FastTextLanguageIdentificationStage(ProcessingStage[AudioTask, AudioTask]
         except ImportError as exc:
             msg = (
                 f"{type(self).__name__} requires fasttext. "
-                "Install the text CPU dependencies with `pip install 'nemo_curator[text_cpu]'`."
+                "Install the tested CPU LID runtime with "
+                "`pip install 'numpy==1.26.4' 'fasttext==0.9.3'`."
             )
             raise ImportError(msg) from exc
 
@@ -221,13 +222,17 @@ class _FastTextLanguageIdentificationStage(ProcessingStage[AudioTask, AudioTask]
             set_note(task.data, self.name, note, self.notes_key)
 
     def process_batch(self, tasks: list[AudioTask]) -> list[AudioTask]:
-        if not tasks:
+        # Ray Data supplies object columns as NumPy arrays. Normalize at the
+        # stage boundary so both truth-value checks and the declared return
+        # type are independent of the backend's batch container.
+        task_list = list(tasks)
+        if not task_list:
             return []
         self._ensure_setup()
-        eligible_tasks, texts = self._collect_model_inputs(tasks)
+        eligible_tasks, texts = self._collect_model_inputs(task_list)
 
         if not texts:
-            return tasks
+            return task_list
 
         labels, probabilities = self._model.predict(texts, k=1)
         if len(labels) != len(texts) or len(probabilities) != len(texts):
@@ -238,7 +243,7 @@ class _FastTextLanguageIdentificationStage(ProcessingStage[AudioTask, AudioTask]
             raise ValueError(msg)
         self._write_predictions(eligible_tasks, labels, probabilities)
 
-        return tasks
+        return task_list
 
 
 @dataclass

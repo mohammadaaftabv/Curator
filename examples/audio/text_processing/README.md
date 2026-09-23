@@ -4,6 +4,12 @@
 FastText and IndicLID CPU backends. All backends write
 `llm_language_prediction`; the existing verifier updates `_skipme`.
 
+Both CPU backends use the `fasttext==0.9.3` runtime and a separate `.bin`
+checkpoint. In an existing container, place `fasttext==0.9.3` and
+`numpy==1.26.4` in an isolated Python overlay and prepend it to `PYTHONPATH`;
+FastText 0.9.3 batch prediction is not compatible with NumPy 2.x. The LLM
+backend does not use this overlay.
+
 ## One CPU backend
 
 Use FastText when every input `source_lang` has an exact `lid.176` label:
