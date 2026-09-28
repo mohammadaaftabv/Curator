@@ -390,7 +390,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
             "Language-ID implementation. 'llm' preserves the existing prompt stage; 'fasttext' and 'indiclid' "
             "use one local model for every row; 'config' routes each row by source_lang using "
             "--language_id_backend_config_file. Direct fasttext fails closed if any row's source_lang is not "
-            "an exact lid.176 label; route unsupported Indic codes (and the qualified kok/gom proxy) to IndicLID."
+            "an exact lid.176 label. The checked-in 22-language config applies the evaluated FastText/IndicLID "
+            "routing rather than routing only by checkpoint coverage."
         ),
     )
     ap.add_argument(
@@ -400,7 +401,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help=(
             "Strict JSON object mapping each source_lang code to 'fasttext' or 'indiclid'. Required only for "
             "--language_id_backend=config; a row whose source_lang is absent fails closed. Example: "
-            '{"hi":"fasttext","brx":"indiclid"}.'
+            "examples/audio/text_processing/language_id_backends_indic_22.json. Its sd route is for "
+            "Arabic-script Sindhi only."
         ),
     )
     ap.add_argument(

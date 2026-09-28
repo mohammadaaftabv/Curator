@@ -223,6 +223,8 @@ def test_indiclid_mapping_is_the_exact_26_label_inventory() -> None:
     assert INDICLID_LABEL_TO_LANGUAGE["kas_Deva"] == "ks"
     assert INDICLID_LABEL_TO_LANGUAGE["mni_Beng"] == "mni"
     assert INDICLID_LABEL_TO_LANGUAGE["mni_Meti"] == "mni"
+    assert INDICLID_LABEL_TO_LANGUAGE["snd_Arab"] == "sd"
+    assert "snd_Deva" not in INDICLID_LABEL_TO_LANGUAGE
     assert INDICLID_LABEL_TO_LANGUAGE["eng_Latn"] == "en"
 
 

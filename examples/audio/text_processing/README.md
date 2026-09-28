@@ -32,17 +32,42 @@ To use IndicLID instead, replace the final two options with:
 
 ## Route by language
 
-Create a JSON file containing every `source_lang` present in the run:
+The evaluated 22-language Granary routing is checked in as
+`language_id_backends_indic_22.json`. It uses IndicLID for Assamese (`as`),
+Bodo (`brx`), Dogri (`doi`), Gujarati (`gu`), Kashmiri (`ks`), Konkani
+(`kok`), Maithili (`mai`), Malayalam (`ml`), Manipuri (`mni`), Nepali (`ne`),
+Odia (`or`), Sanskrit (`sa`), Santali (`sat`), Urdu (`ur`), and Arabic-script
+Sindhi (`sd`). It uses FastText for Bengali (`bn`), Hindi (`hi`), Kannada
+(`kn`), Marathi (`mr`), Punjabi (`pa`), Tamil (`ta`), and Telugu (`te`):
 
 ```json
 {
-  "hi": "fasttext",
+  "as": "indiclid",
+  "bn": "fasttext",
   "brx": "indiclid",
-  "kok": "indiclid"
+  "doi": "indiclid",
+  "gu": "indiclid",
+  "hi": "fasttext",
+  "kn": "fasttext",
+  "kok": "indiclid",
+  "ks": "indiclid",
+  "mai": "indiclid",
+  "ml": "indiclid",
+  "mni": "indiclid",
+  "mr": "fasttext",
+  "ne": "indiclid",
+  "or": "indiclid",
+  "pa": "fasttext",
+  "sa": "indiclid",
+  "sat": "indiclid",
+  "sd": "indiclid",
+  "ta": "fasttext",
+  "te": "fasttext",
+  "ur": "indiclid"
 }
 ```
 
-Then pass both checkpoints:
+Pass the checked-in config and both checkpoints:
 
 ```bash
 python examples/audio/text_processing/run_text_pipeline.py \
@@ -50,15 +75,22 @@ python examples/audio/text_processing/run_text_pipeline.py \
   --output_dir /data/output \
   --enable_language_id \
   --language_id_backend config \
-  --language_id_backend_config_file /configs/lid_backends.json \
+  --language_id_backend_config_file examples/audio/text_processing/language_id_backends_indic_22.json \
   --fasttext_lid_model_path /models/lid.176.bin \
   --indiclid_lid_model_path /models/indiclid-ftn/model_baseline_roman.bin
 ```
 
-CPU backends read `abbreviated_text` before PnC. FastText fails closed for
-languages without an exact model label; route those languages, including the
-qualified Konkani `kok`/`gom` proxy, to IndicLID. Omitting
-`--language_id_backend` preserves the existing LLM behavior.
+The recommended split is based on the evaluated per-language accuracy, not
+only model label availability. It intentionally routes some languages that
+have exact FastText labels to IndicLID and routes Konkani to IndicLID rather
+than treating FastText's `gom` label as an exact `kok` match.
+
+The `sd` route is specifically for Arabic-script Sindhi: IndicLID-FTN exposes
+`snd_Arab` but no Devanagari Sindhi label. Routing currently uses only
+`source_lang`, so a mixed-script `sd` cohort must be split or validated before
+using this config. CPU backends read `abbreviated_text` before PnC. A config
+must contain every `source_lang` present in the run; missing routes fail
+closed. Omitting `--language_id_backend` preserves the existing LLM behavior.
 
 Models: [FastText lid.176](https://fasttext.cc/docs/en/language-identification.html)
 and [IndicLID-FTN v1.0](https://github.com/AI4Bharat/IndicLID/releases/tag/v1.0).

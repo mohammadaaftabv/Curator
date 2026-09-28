@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 RUN_TEXT_PIPELINE = Path(__file__).parents[4] / "examples" / "audio" / "text_processing" / "run_text_pipeline.py"
+RECOMMENDED_INDIC_22_CONFIG = RUN_TEXT_PIPELINE.parent / "language_id_backends_indic_22.json"
 
 _RUNNER_SPEC = importlib.util.spec_from_file_location("curator_lid_run_text_pipeline", RUN_TEXT_PIPELINE)
 if _RUNNER_SPEC is None or _RUNNER_SPEC.loader is None:
@@ -144,6 +145,45 @@ def test_config_backend_loads_strict_per_language_routes(tmp_path: Path) -> None
 
     assert backend_config == {"hi": "fasttext", "brx": "indiclid"}
     assert output_key == "llm_language_prediction"
+
+
+def test_recommended_indic_22_config_is_the_exact_evaluated_partition() -> None:
+    backend_config = _RUNNER._load_language_id_backend_config(str(RECOMMENDED_INDIC_22_CONFIG))
+    expected = {
+        "as": "indiclid",
+        "bn": "fasttext",
+        "brx": "indiclid",
+        "doi": "indiclid",
+        "gu": "indiclid",
+        "hi": "fasttext",
+        "kn": "fasttext",
+        "kok": "indiclid",
+        "ks": "indiclid",
+        "mai": "indiclid",
+        "ml": "indiclid",
+        "mni": "indiclid",
+        "mr": "fasttext",
+        "ne": "indiclid",
+        "or": "indiclid",
+        "pa": "fasttext",
+        "sa": "indiclid",
+        "sat": "indiclid",
+        "sd": "indiclid",
+        "ta": "fasttext",
+        "te": "fasttext",
+        "ur": "indiclid",
+    }
+
+    indiclid_languages = {language for language, backend in backend_config.items() if backend == "indiclid"}
+    fasttext_languages = {language for language, backend in backend_config.items() if backend == "fasttext"}
+
+    assert backend_config == expected
+    assert len(indiclid_languages) == 15
+    assert len(fasttext_languages) == 7
+    assert indiclid_languages.isdisjoint(fasttext_languages)
+    assert indiclid_languages | fasttext_languages == set(
+        _RUNNER.FastTextLanguageIdentificationStage.granary_source_languages
+    )
 
 
 def test_config_backend_rejects_llm_values(tmp_path: Path) -> None:
