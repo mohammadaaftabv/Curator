@@ -1,8 +1,25 @@
 # Text pipeline language ID
 
 `run_text_pipeline.py` supports the existing LLM language-ID stage plus local
-FastText and IndicLID CPU backends. All backends write
-`llm_language_prediction`; the existing verifier updates `_skipme`.
+FastText and IndicLID CPU backends. For the same command-line options, every
+backend runs at the same serial pipeline position, reads the same text field,
+and writes `llm_language_prediction` plus the same verification fields. The
+shared verifier's only capability difference is code-switching: the LLM can
+report multiple languages, while FastText and IndicLID return top-1.
+Recognized code-switches are informational and never set `_skipme`; a
+single-language mismatch still does. Raw predictions remain backend-native:
+the LLM writes its two-line `Primary`/`Languages` response, while the CPU
+models write an ISO language code.
+
+By default, every backend runs after PnC and reads `pnc_text` (or the configured
+`--pnc_output_key`). `--language_id_first` moves every backend and the shared
+verifier before PnC, where they read `abbreviated_text` (or recovered entity
+text when enabled). `--language_id_text_key` overrides the input identically
+for every backend. Language ID is intentionally kept out of fused execution so
+verification and `_skipme` mutations happen at the same point for all models.
+When PnC and RecoverEntities are both disabled, the default post-PnC position
+expects the input manifest to already contain `pnc_text`; use
+`--language_id_first` for manifests that contain only `abbreviated_text`.
 
 Both CPU backends use the `fasttext==0.9.3` runtime and a separate `.bin`
 checkpoint. In an existing container, place `fasttext==0.9.3` and
@@ -19,6 +36,7 @@ python examples/audio/text_processing/run_text_pipeline.py \
   --input_manifest /data/input.jsonl \
   --output_dir /data/output \
   --enable_language_id \
+  --language_id_first \
   --language_id_backend fasttext \
   --fasttext_lid_model_path /models/lid.176.bin
 ```
@@ -74,6 +92,7 @@ python examples/audio/text_processing/run_text_pipeline.py \
   --input_manifest /data/input.jsonl \
   --output_dir /data/output \
   --enable_language_id \
+  --language_id_first \
   --language_id_backend config \
   --language_id_backend_config_file examples/audio/text_processing/language_id_backends_indic_22.json \
   --fasttext_lid_model_path /models/lid.176.bin \
@@ -88,9 +107,9 @@ than treating FastText's `gom` label as an exact `kok` match.
 The `sd` route is specifically for Arabic-script Sindhi: IndicLID-FTN exposes
 `snd_Arab` but no Devanagari Sindhi label. Routing currently uses only
 `source_lang`, so a mixed-script `sd` cohort must be split or validated before
-using this config. CPU backends read `abbreviated_text` before PnC. A config
-must contain every `source_lang` present in the run; missing routes fail
-closed. Omitting `--language_id_backend` preserves the existing LLM behavior.
+using this config. A config must contain every `source_lang` present in the run;
+missing routes fail closed. Omitting `--language_id_backend` selects the LLM,
+without changing the shared input-field or pipeline-position rules above.
 
 Models: [FastText lid.176](https://fasttext.cc/docs/en/language-identification.html)
 and [IndicLID-FTN v1.0](https://github.com/AI4Bharat/IndicLID/releases/tag/v1.0).
