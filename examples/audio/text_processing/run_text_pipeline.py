@@ -30,7 +30,8 @@ Architecture:
         → restores punctuation/capitalisation, writes pnc_text
     [if --enable_language_id without --language_id_first] LanguageID + verification
         → every backend runs on the configured PnC output after PnC
-    LanguageID can use an LLM GPU, FastText CPU, or IndicLID CPU backend
+    LanguageID can use an LLM GPU, FastText CPU, or IndicLID CPU backend,
+        or route rows by source_lang across all three
         → LLM preserves the existing prompt path; CPU backends reproduce the
           local evaluation preprocessing and batched top-1 inference
         → all backends write the same llm_language_prediction field
@@ -139,6 +140,22 @@ _LANGUAGE_ID_PROMPT = _PROMPT_DIR / "language_id_prompt.md"
 _RECOVER_ENTITIES_PROMPT = _PROMPT_DIR / "recover_entities_prompt.md"
 _LANGUAGE_ID_BACKENDS = frozenset({"llm", "fasttext", "indiclid", "config"})
 _CPU_LANGUAGE_ID_BACKENDS = frozenset({"fasttext", "indiclid"})
+_ROUTED_LANGUAGE_ID_BACKENDS = frozenset({"llm"}) | _CPU_LANGUAGE_ID_BACKENDS
+
+# Evaluated Granary 22-language routing. Keep these sets next to the runner,
+# matching the language-based model selection in the audio ASR example, so a
+# production invocation does not depend on an external JSON file. Sindhi is
+# deliberately absent from both CPU sets: the evaluated ASR text is Devanagari,
+# while IndicLID-FTN only exposes ``snd_Arab`` and both CPU models scored 0%.
+_FASTTEXT_LANGUAGE_ID_LANGS = frozenset({"bn", "hi", "kn", "mr", "pa", "ta", "te"})
+_INDICLID_LANGUAGE_ID_LANGS = frozenset(
+    {"as", "brx", "doi", "gu", "kok", "ks", "mai", "ml", "mni", "ne", "or", "sa", "sat", "ur"}
+)
+_DEFAULT_LANGUAGE_ID_BACKEND_BY_LANGUAGE = {
+    **dict.fromkeys(sorted(_FASTTEXT_LANGUAGE_ID_LANGS), "fasttext"),
+    **dict.fromkeys(sorted(_INDICLID_LANGUAGE_ID_LANGS), "indiclid"),
+    "sd": "llm",
+}
 _SAMPLING_STAGE_KEYS = frozenset(
     {
         "recover_entities",
@@ -156,7 +173,7 @@ _SAMPLING_STAGE_KEYS = frozenset(
 
 
 def _load_language_id_backend_config(path: str) -> dict[str, str]:
-    """Load a strict ``source_lang -> CPU backend`` JSON mapping."""
+    """Load a strict ``source_lang -> backend`` JSON routing override."""
     config_path = Path(path)
     try:
         parsed = json.loads(config_path.read_text(encoding="utf-8"))
@@ -181,10 +198,10 @@ def _load_language_id_backend_config(path: str) -> dict[str, str]:
             raise TypeError(msg)
         language = raw_language.strip().lower()
         backend = raw_backend.strip().lower()
-        if backend not in _CPU_LANGUAGE_ID_BACKENDS:
+        if backend not in _ROUTED_LANGUAGE_ID_BACKENDS:
             msg = (
                 f"Language-ID backend for {raw_language!r} must be one of "
-                f"{sorted(_CPU_LANGUAGE_ID_BACKENDS)}, got {raw_backend!r}"
+                f"{sorted(_ROUTED_LANGUAGE_ID_BACKENDS)}, got {raw_backend!r}"
             )
             raise ValueError(msg)
         if language in normalized:
@@ -214,11 +231,15 @@ def _resolve_language_id_configuration(args: argparse.Namespace) -> tuple[dict[s
         return None, "llm_language_prediction"
 
     if backend == "config":
-        if not args.language_id_backend_config_file:
-            msg = "--language_id_backend=config requires --language_id_backend_config_file"
-            raise ValueError(msg)
-        backend_by_language = _load_language_id_backend_config(args.language_id_backend_config_file)
+        backend_by_language = (
+            _load_language_id_backend_config(args.language_id_backend_config_file)
+            if args.language_id_backend_config_file
+            else dict(_DEFAULT_LANGUAGE_ID_BACKEND_BY_LANGUAGE)
+        )
         selected_backends = set(backend_by_language.values())
+        if selected_backends == {"llm"}:
+            msg = "An all-LLM routing config is redundant; use --language_id_backend=llm instead"
+            raise ValueError(msg)
     else:
         if args.language_id_backend_config_file:
             msg = "--language_id_backend_config_file requires --language_id_backend=config"
@@ -378,7 +399,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         default=False,
         help=(
             "Enable language identification plus CPU verification. The default --language_id_backend=llm "
-            "preserves the existing LLM behavior; fasttext, indiclid, and config select local CPU models."
+            "preserves the existing LLM behavior; fasttext and indiclid select one local CPU model, while config "
+            "uses the built-in per-language FastText/IndicLID/LLM routing."
         ),
     )
     ap.add_argument(
@@ -388,9 +410,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         help=(
             "Language-ID implementation. 'llm' preserves the existing prompt stage; 'fasttext' and 'indiclid' "
             "use one local model for every row; 'config' routes each row by source_lang using "
-            "--language_id_backend_config_file. Direct fasttext fails closed if any row's source_lang is not "
-            "an exact lid.176 label. The checked-in 22-language config applies the evaluated FastText/IndicLID "
-            "routing rather than routing only by checkpoint coverage."
+            "the built-in evaluated 22-language split (FastText/IndicLID, with Sindhi routed to the LLM). "
+            "--language_id_backend_config_file can optionally override that split. Direct fasttext fails closed "
+            "if any row's source_lang is not an exact lid.176 label."
         ),
     )
     ap.add_argument(
@@ -398,10 +420,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:  # noqa: PLR0915
         type=str,
         default=None,
         help=(
-            "Strict JSON object mapping each source_lang code to 'fasttext' or 'indiclid'. Required only for "
-            "--language_id_backend=config; a row whose source_lang is absent fails closed. Example: "
-            "examples/audio/text_processing/language_id_backends_indic_22.json. Its sd route is for "
-            "Arabic-script Sindhi only."
+            "Optional JSON override mapping each source_lang code to 'llm', 'fasttext', or 'indiclid'. Valid only "
+            "with --language_id_backend=config; without it, the runner uses its built-in evaluated 22-language "
+            "routing. A row whose source_lang is absent from the selected mapping fails closed. Example: "
+            "examples/audio/text_processing/language_id_backends_indic_22.json."
         ),
     )
     ap.add_argument(
@@ -1292,12 +1314,13 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             f"{args.recover_entities_normalized_key}) → {args.recover_entities_output_key}"
         )
 
-    def _make_llm_language_id_stage() -> object:
+    def _make_llm_language_id_stage(source_lang_allowlist: frozenset[str] | None = None) -> object:
         return text_stage_cls(
             name="LanguageID",
             prompt_file=language_id_prompt,
             text_key=langid_text_key,
             output_text_key=language_id_output_key,
+            source_lang_allowlist=source_lang_allowlist,
             enable_validation=False,
             **_resolve_stage_sampling(args, "language_id"),
             **shared_model_kwargs,
@@ -1309,9 +1332,16 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
             stages.append(_make_llm_language_id_stage())
         else:
             if args.language_id_backend == "config":
-                selected_cpu_backends = set(language_id_backend_config.values())
+                selected_backends = set(language_id_backend_config.values())
+                llm_languages = frozenset(
+                    language for language, backend in language_id_backend_config.items() if backend == "llm"
+                )
             else:
-                selected_cpu_backends = {args.language_id_backend}
+                selected_backends = {args.language_id_backend}
+                llm_languages = frozenset()
+
+            if "llm" in selected_backends:
+                stages.append(_make_llm_language_id_stage(llm_languages))
 
             common_cpu_lid_kwargs = {
                 "name": "LanguageID",
@@ -1319,14 +1349,14 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915
                 "output_text_key": language_id_output_key,
                 "backend_by_language": language_id_backend_config,
             }
-            if "fasttext" in selected_cpu_backends:
+            if "fasttext" in selected_backends:
                 stages.append(
                     FastTextLanguageIdentificationStage(
                         model_path=args.fasttext_lid_model_path,
                         **common_cpu_lid_kwargs,
                     )
                 )
-            if "indiclid" in selected_cpu_backends:
+            if "indiclid" in selected_backends:
                 stages.append(
                     IndicLIDLanguageIdentificationStage(
                         model_path=args.indiclid_lid_model_path,

@@ -17,7 +17,7 @@
   "pa": "fasttext",
   "sa": "indiclid",
   "sat": "indiclid",
-  "sd": "indiclid",
+  "sd": "llm",
   "ta": "fasttext",
   "te": "fasttext",
   "ur": "indiclid"

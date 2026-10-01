@@ -177,7 +177,7 @@ class FusedRemoteTextLLMStage(ProcessingStage["AudioTask", "AudioTask"]):
         for sub in self.sub_stages:
             valid_indices: list[int] = []
             messages_list: list[list[dict]] = []
-            for i, task in enumerate(tasks):
+            for i, task in sub._source_language_enabled_tasks(tasks):
                 text = task.data.get(sub.text_key, "")
                 skip = task.data.get(sub.skip_me_key, "")
                 if skip:
