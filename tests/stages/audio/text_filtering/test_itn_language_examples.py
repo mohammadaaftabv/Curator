@@ -405,6 +405,32 @@ def test_bundled_examples_preserve_source_example_arity_and_written_forms() -> N
         assert re.findall(r"[a-z]+", url_spoken) == ["example", "com", "pricing", "john", "gmail", "com"]
 
 
+def test_telugu_itn_rules_cover_reviewed_edge_cases() -> None:
+    telugu_examples = load_itn_language_examples()["te"]
+    rows = _table_rows(telugu_examples)
+
+    assert rows["Ordinal"] == (
+        "మొదటిది / ఇరవై ఒకటవది / యాభైవది",
+        "1వది / 21వది / 50వది",
+    )
+    for reviewed_rule in (
+        'పన్నెండు ఇంచెస్ → `12"`',
+        "పన్నెండు బై పన్నెండు → `12x12`",
+        "అతను డాక్టర్ → `అతను డాక్టర్`",
+        "డాక్టర్గా → `డాక్టర్గా`",
+        "డాక్టర్లు → `డాక్టర్లు`",
+        "మొదటిది → `1వది`",
+        "మొదటిసార → `1వసారి`",
+        "రెండులోని → `2లోని`",
+        "తొమ్మిది పది → `9:10`",
+        "తొమ్మిది ముప్పై → `9:30`",
+        "ఇద్దరు పిల్లలకి → `ఇద్దరు పిల్లలకి`",
+        "ముప్పావు కప్పు → `3/4 కప్పు`",
+        "ఒకటిన్నర గంటలు → `1.5 గంటలు`",
+    ):
+        assert reviewed_rule in telugu_examples
+
+
 def test_every_spoken_example_uses_its_configured_script() -> None:
     examples = load_itn_language_examples()
 
@@ -466,6 +492,7 @@ def test_indic_itn_prompt_uses_one_language_rules_placeholder_and_preserves_cont
         "temporal or financial",
         "true fraction",
         "final clean numeric expression",
+        "directly modifies a person's name",
     ):
         assert required_control in prompt
     for source_example in (

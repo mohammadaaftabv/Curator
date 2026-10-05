@@ -21,6 +21,7 @@ Additional rules:
 - Render recognized acronyms and structured letter-number forms shown by the active-language examples in their conventional uppercase written form; do not expand them or convert unrelated letter-name sequences.
 - Convert the ordinary spoken form of zero to `0`. In phone and time contexts, also convert alternate zero readings licensed by the active-language rules to `0`.
 - Interpret postal or ZIP codes digit by digit and write the resulting code as digits. Write house numbers with digits.
+- Abbreviate a professional title only when it directly modifies a person's name. Keep standalone, predicative, plural, inflected, and suffix-attached profession words unchanged.
 
 ## Ambiguity Resolution
 
