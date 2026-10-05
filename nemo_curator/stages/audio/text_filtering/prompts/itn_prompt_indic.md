@@ -22,11 +22,12 @@ Additional rules:
 - Convert the ordinary spoken form of zero to `0`. In phone and time contexts, also convert alternate zero readings licensed by the active-language rules to `0`.
 - Interpret postal or ZIP codes digit by digit and write the resulting code as digits. Write house numbers with digits.
 - Abbreviate a professional title only when it directly modifies a person's name. Keep standalone, predicative, plural, inflected, and suffix-attached profession words unchanged.
+- When an active-language example or rule explicitly covers an ambiguous expression, follow it instead of the general defaults below.
 
 ## Ambiguity Resolution
 
-- Prefer digits for quantities, measurements, ages, dates, and counts.
-- Keep number expressions in word form when they are idiomatic, part of a proper noun, pronominal or indefinite, or a vague quantity.
+- Prefer digits for quantities, measurements, ages, dates, and counts, unless the active-language rules require a lexical human-count form.
+- Keep number expressions in word form when they are idiomatic, part of a proper noun, pronominal or indefinite, or a vague quantity, unless an active-language ordinal rule explicitly gives a suffix-preserving written form.
 - Convert an expression denoting one quarter to `1/4` only when it functions as a true fraction; leave it in word form in temporal or financial constructions.
 - Convert an expression denoting one half to `1/2` only when it functions as a true fraction; leave idiomatic uses in word form.
 - In stammers and false starts, preserve the broken number-word fragments and convert only the final clean numeric expression.

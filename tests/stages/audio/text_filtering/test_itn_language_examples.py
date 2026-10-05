@@ -431,6 +431,25 @@ def test_telugu_itn_rules_cover_reviewed_edge_cases() -> None:
         assert reviewed_rule in telugu_examples
 
 
+def test_synced_reviewed_language_corrections_are_retained() -> None:
+    examples = load_itn_language_examples()
+    reviewed_snippets = {
+        "gu": ("1લું / 21મું / 50મું",),
+        "ne": ("उनान्सय सेन्ट",),
+        "pa": ("ਉਣਿੰਜਾ ਡਾਲਰ", "ਨੜਿੰਨਵੇਂ ਸੈਂਟ"),
+        "doi": ("1मां / 21मां / 50मां",),
+        "ks": ("پَنٛژٲہیُٛم", "سَتہٕ تٲجی", "پؠٹھٕ"),
+        "mai": ("प्रोफेसर जोन्स",),
+        "mni": ("ꯅꯤꯝꯐꯨ", "ꯅꯤꯊꯣꯢ"),
+        "sat": ("ᱵᱟᱨ ᱦᱟᱡᱟᱨ ᱵᱟᱨ ᱜᱮᱞ ᱯᱩᱱ",),
+        "or": ("ତିନିଟା ପାଞ୍ଚ ମିନିଟ୍", "ଏକଟା ପଞ୍ଚଚାଳିଶ ମିନିଟ୍"),
+    }
+
+    for language, snippets in reviewed_snippets.items():
+        for snippet in snippets:
+            assert snippet in examples[language]
+
+
 def test_every_spoken_example_uses_its_configured_script() -> None:
     examples = load_itn_language_examples()
 
@@ -493,6 +512,9 @@ def test_indic_itn_prompt_uses_one_language_rules_placeholder_and_preserves_cont
         "true fraction",
         "final clean numeric expression",
         "directly modifies a person's name",
+        "active-language example or rule explicitly covers",
+        "lexical human-count form",
+        "suffix-preserving written form",
     ):
         assert required_control in prompt
     for source_example in (
