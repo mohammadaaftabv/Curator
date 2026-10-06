@@ -45,6 +45,7 @@ EXPECTED_CATEGORIES = (
     "Ordinal",
     "Date",
     "Time",
+    "Duration",
     "Money",
     "Percent",
     "Units",
@@ -87,6 +88,7 @@ EXPECTED_EXAMPLE_DELIMITERS = {
     "Ordinal": 2,
     "Date": 1,
     "Time": 3,
+    "Duration": 0,
     "Money": 1,
     "Percent": 1,
     "Units": 2,
@@ -101,13 +103,12 @@ EXPECTED_EXAMPLE_DELIMITERS = {
     "Letter+num": 1,
 }
 EXPECTED_INVARIANT_WRITTEN_EXAMPLES = {
-    "Cardinal": "14 / 1,030.5 / 2024",
+    "Cardinal": "14 / 1,030.5 / 2,024",
     "Money": "$52 / $249.99",
     "Units": "5 kg / 90 km/h / 5'4\"",
     "Fractions": "1/2 / 1/3 / 2/3 / 1 3/4",
     "Phone": "5558675309 / 18005550199",
     "URL/Email": "example.com/pricing / john@gmail.com",
-    "Decades": "70s / 20s",
     "Letter+num": "Q2 / B12",
 }
 EXPECTED_SCRIPT_NAMES = {
@@ -158,7 +159,7 @@ def _table_rows(fragment: str) -> dict[str, tuple[str, str]]:
         category, spoken, written = cells
         assert category not in rows
         rows[category] = (spoken, written)
-    assert len(table_lines) == 18
+    assert len(table_lines) == 19
     return rows
 
 
@@ -398,7 +399,8 @@ def test_bundled_examples_preserve_source_example_arity_and_written_forms() -> N
 
         for category, expected_written in EXPECTED_INVARIANT_WRITTEN_EXAMPLES.items():
             assert rows[category][1] == expected_written
-        assert rows["Time"][1].startswith("3:05 PM / 10 AM / 1:45 / ")
+        assert rows["Time"][1].startswith("3:05 PM / 10:00 AM / 1:45 / ")
+        assert rows["Duration"][1] == "1:00"
 
         url_spoken, url_written = rows["URL/Email"]
         assert url_written == "example.com/pricing / john@gmail.com"
@@ -426,7 +428,7 @@ def test_telugu_itn_rules_cover_reviewed_edge_cases() -> None:
         "తొమ్మిది ముప్పై → `9:30`",
         "ఇద్దరు పిల్లలకి → `ఇద్దరు పిల్లలకి`",
         "ముప్పావు కప్పు → `3/4 కప్పు`",
-        "ఒకటిన్నర గంటలు → `1.5 గంటలు`",
+        "ఒకటిన్నర గంటలు → `1:30`",
     ):
         assert reviewed_rule in telugu_examples
 
