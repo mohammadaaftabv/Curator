@@ -159,7 +159,6 @@ def _table_rows(fragment: str) -> dict[str, tuple[str, str]]:
         category, spoken, written = cells
         assert category not in rows
         rows[category] = (spoken, written)
-    assert len(table_lines) == 19
     return rows
 
 
@@ -380,7 +379,10 @@ def test_bundled_language_examples_have_exact_target_codes_and_categories() -> N
     assert ITN_LANGUAGE_CODES == PNC_LANGUAGE_CODES
     for code, fragment in examples.items():
         assert fragment.splitlines()[0] == f"### {EXPECTED_LANGUAGE_NAMES[code]} (`{code}`) conversion examples"
-        assert tuple(_table_rows(fragment)) == EXPECTED_CATEGORIES
+        expected_categories = EXPECTED_CATEGORIES
+        if code == "mr":
+            expected_categories = (*EXPECTED_CATEGORIES[:1], "Decimal digit sequence", *EXPECTED_CATEGORIES[1:])
+        assert tuple(_table_rows(fragment)) == expected_categories
         footer = next(
             line for line in fragment.splitlines() if line.startswith("Structural forms (spoken → written):")
         )
@@ -390,17 +392,31 @@ def test_bundled_language_examples_have_exact_target_codes_and_categories() -> N
 def test_bundled_examples_preserve_source_example_arity_and_written_forms() -> None:
     examples = load_itn_language_examples()
 
-    for fragment in examples.values():
+    for language, fragment in examples.items():
         rows = _table_rows(fragment)
-        for category, expected_delimiters in EXPECTED_EXAMPLE_DELIMITERS.items():
+        expected_delimiters_by_category = dict(EXPECTED_EXAMPLE_DELIMITERS)
+        expected_written_by_category = dict(EXPECTED_INVARIANT_WRITTEN_EXAMPLES)
+        if language == "hi":
+            expected_delimiters_by_category.update(
+                {"Ordinal": 3, "Time": 4, "Duration": 2, "Money": 2, "Fractions": 4}
+            )
+            expected_written_by_category.update(
+                Money="$52 / $249.99 / ₹52.04",
+                Fractions="1/2 / 1/3 / 2/3 / 1 3/4 / 21/2",
+            )
+        elif language == "mr":
+            expected_delimiters_by_category["Decimal digit sequence"] = 0
+            expected_written_by_category["Decimal digit sequence"] = "3.05"
+        for category, expected_delimiters in expected_delimiters_by_category.items():
             spoken, written = rows[category]
             assert spoken.count(" / ") == expected_delimiters
             assert written.count(" / ") == expected_delimiters
 
-        for category, expected_written in EXPECTED_INVARIANT_WRITTEN_EXAMPLES.items():
+        for category, expected_written in expected_written_by_category.items():
             assert rows[category][1] == expected_written
         assert rows["Time"][1].startswith("3:05 PM / 10:00 AM / 1:45 / ")
-        assert rows["Duration"][1] == "1:00"
+        expected_duration = "1:00 / 1:00:05 / 0:01:05" if language == "hi" else "1:00"
+        assert rows["Duration"][1] == expected_duration
 
         url_spoken, url_written = rows["URL/Email"]
         assert url_written == "example.com/pricing / john@gmail.com"

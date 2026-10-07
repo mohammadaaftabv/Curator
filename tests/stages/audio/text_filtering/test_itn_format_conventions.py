@@ -92,7 +92,10 @@ def test_exact_language_coverage() -> None:
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_category_and_pair_coverage(language: str) -> None:
     rows = _rows(language)
-    assert tuple(rows) == CATEGORIES
+    expected_categories = CATEGORIES
+    if language == "mr":
+        expected_categories = (*CATEGORIES[:1], "Decimal digit sequence", *CATEGORIES[1:])
+    assert tuple(rows) == expected_categories
     for category, (spoken, written) in rows.items():
         assert len(spoken.split(" / ")) == len(written.split(" / ")), category
 
@@ -145,7 +148,8 @@ def test_clocks_and_durations_share_the_common_numeric_style(language: str) -> N
     clocks = rows["Time"][1].split(" / ")
     assert clocks[:3] == ["3:05 PM", "10:00 AM", "1:45"]
     assert any(not c.isascii() for c in clocks[3])
-    assert rows["Duration"][1] == "1:00"
+    expected_duration = "1:00 / 1:00:05 / 0:01:05" if language == "hi" else "1:00"
+    assert rows["Duration"][1] == expected_duration
     assert "9:00:02" in PROMPT
     assert "more than 23 hours" in PROMPT
     assert "only when seconds are supplied" in PROMPT
@@ -156,7 +160,8 @@ def test_clocks_and_durations_share_the_common_numeric_style(language: str) -> N
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_money_and_percent_symbols_have_no_number_gap(language: str) -> None:
     rows = _rows(language)
-    assert rows["Money"][1] == "$52 / $249.99"
+    expected_money = "$52 / $249.99 / ₹52.04" if language == "hi" else "$52 / $249.99"
+    assert rows["Money"][1] == expected_money
     for category in ("Money", "Percent"):
         value = rows[category][1]
         assert not re.search(r"[$₹£€]\s+\d|\d\s+%", value)
@@ -204,3 +209,252 @@ def test_santali_and_sindhi_years_have_explicit_scale_words() -> None:
     assert "ᱢᱤᱫ ᱜᱮᱥᱟᱭ ᱟᱨᱮ ᱥᱟᱭ" in _rows("sat")["Date"][0]
     assert "अरिड़हं सौ सतेतालीह" in _rows("sd")["Date"][0]
     assert "उणीह सौ नवे" in _rows("sd")["Date"][0]
+
+
+@pytest.mark.parametrize(
+    ("language", "category", "spoken", "written"),
+    [
+        (
+            "hi",
+            "Ordinal",
+            "पहला / इक्कीसवाँ / पचासवाँ / इक्कीसवीं",
+            "1वाँ / 21वाँ / 50वाँ / 21वीं",
+        ),
+        (
+            "hi",
+            "Money",
+            "बावन डॉलर / दो सौ उनचास डॉलर और निन्यानवे सेंट / बावन रुपये चार पैसे",
+            "$52 / $249.99 / ₹52.04",
+        ),
+        (
+            "hi",
+            "Duration",
+            "एक घंटा / एक घंटा पाँच सेकंड / एक मिनट पाँच सेकंड",
+            "1:00 / 1:00:05 / 0:01:05",
+        ),
+        (
+            "hi",
+            "Time",
+            "तीन बजकर पाँच मिनट पी एम / दस ए एम / एक बजकर पैंतालीस मिनट / दोपहर / चार बजे",
+            "3:05 PM / 10:00 AM / 1:45 / दोपहर / 4:00",
+        ),
+        (
+            "hi",
+            "Fractions",
+            "आधा / एक तिहाई / दो तिहाई / एक और तीन चौथाई / इक्कीस बटा दो",
+            "1/2 / 1/3 / 2/3 / 1 3/4 / 21/2",
+        ),
+        (
+            "mr",
+            "Decimal digit sequence",
+            "तीन पूर्णांक शून्य पाच",
+            "3.05",
+        ),
+    ],
+)
+def test_approved_example_rows(language: str, category: str, spoken: str, written: str) -> None:
+    assert _rows(language)[category] == (spoken, written)
+
+
+@pytest.mark.parametrize(
+    ("language", "approved_rule"),
+    [
+        (
+            "hi",
+            (
+                "- In Hindi explicit measurement quantities, use these mappings: `मीटर` → "
+                "`m`; `ग्राम` → `g`; `लीटर` → `L`; `डिग्री सेल्सियस` → `°C`; `वर्ग सेंटीमीटर` "
+                "→ `cm²`. Keep one space between the newly written measurement amount and "
+                "these units. These mappings do not license removing native inflections or "
+                "rewriting unrelated wording."
+            ),
+        ),
+        (
+            "mr",
+            (
+                "- In Marathi clock expressions containing an hour and a minute count, `N "
+                "वाजून M मिनिटे` means M minutes after hour N, while the clock pattern `N-ला "
+                "M मिनिटे` means M minutes remaining until hour N. Subtract in the latter "
+                "clock construction, including hour rollover; do not extend this reading to "
+                "unrelated dative constructions."
+            ),
+        ),
+    ],
+)
+def test_approved_language_specific_rules(language: str, approved_rule: str) -> None:
+    assert EXAMPLES[language].count(approved_rule) == 1
+
+
+@pytest.mark.parametrize(
+    "approved_rule",
+    [
+        (
+            "- Perform minimal-span editing: copy all text outside eligible conversion "
+            "spans exactly as supplied, preserving wording, order, spelling, native "
+            "grammatical endings, code-switching, script mixing, punctuation, whitespace "
+            "and invisible Unicode characters. Preserve disfluencies, repetitions, false "
+            "starts, colloquial forms, mispronunciations and grammatical errors. Do not "
+            "correct spelling or grammar, normalize Unicode rendering or remove "
+            "formatting characters outside an eligible conversion span."
+        ),
+        (
+            "- Copy existing punctuation and whitespace exactly outside an eligible "
+            "conversion span. Do not add, delete, replace or normalize punctuation or "
+            "spacing merely to make the sentence look more conventional. Add or change "
+            "punctuation only inside an explicitly licensed structured conversion, such "
+            "as a newly converted decimal, clock, date, phone, currency or URL/email "
+            "expression."
+        ),
+        (
+            "Apply these conventions to every eligible newly converted expression across "
+            "the transcript, including eligible spoken percent, measurement, currency or "
+            "named-title forms beside an already-written numeral. A numeral already "
+            "present as digits is not a spoken-number conversion span: preserve its "
+            "digits, digit script, separators, leading zeroes and attached grammatical "
+            "endings, even when another number in the same sentence is converted. "
+            "Converting a neighboring spoken unit or percent word does not by itself "
+            "authorize rewriting that numeral. Apply composite arithmetic or "
+            "restructuring only when the applicable explicit currency or duration rule "
+            "requires it for that expression; this exception does not license normalizing "
+            "unrelated written numbers or complete written dates and codes. Preserve "
+            "unrelated identifiers, punctuation and script mixing; do not globally "
+            "reformat the transcript or invent unreviewed symbol-plus-suffix forms."
+        ),
+        (
+            "- Parse each complete cardinal expression as one numeric value before "
+            "formatting it, using the active language's number vocabulary rather than a "
+            "similarly sounding value. Combine its scale multipliers and lower-order "
+            "remainder; consume every word belonging to the numeral, including an initial "
+            "one that multiplies a scale word. Do not concatenate component values, drop "
+            "a remainder or leave a multiplier word behind. Use ASCII digits for newly "
+            "converted numbers. Group ordinary cardinal quantities and the integer part "
+            "of currency amounts with Indian commas: the last group has three digits and "
+            "preceding groups have two, as in `2,024`, `1,00,000`, and `1,23,456.78`. Do "
+            "not group years, ordinal numbers, date/time fields, phone numbers, postal "
+            "codes, house identifiers, fractions or structured letter-number codes."
+        ),
+        (
+            "- When the input supplies a decimal marker, parse the complete integer part "
+            "before the marker and join the explicitly spoken fractional digits in their "
+            "spoken order after one decimal point. Preserve supplied leading and trailing "
+            "fractional zeroes. Do not treat the fractional digits as separate "
+            "quantities, merge them into the integer part or substitute a mixed-fraction "
+            "representation."
+        ),
+        (
+            "- Use the native ordinal suffix licensed by the actual spoken form, "
+            "preserving its gender, case and attached grammatical endings. Do not replace "
+            "a feminine or inflected ordinal with the masculine suffix merely because an "
+            "example uses a masculine form. Do not introduce English `st`, `nd`, `rd` or "
+            "`th`. Express decades with native suffixes or native decade words, not "
+            "English `s`; retain a lexicalized native decade expression when no numeric "
+            "suffix is established."
+        ),
+        (
+            "- Determine the currency from the spoken currency unit and convert the "
+            "complete eligible money expression, including its amount and currency-unit "
+            "words; do not convert only its number words and leave the money expression "
+            "partially spoken. Put currency symbols immediately before the amount and `%` "
+            "immediately after the number: `$52`, `$249.99`, `₹1,00,000`, `3.5%`. Do not "
+            "put a space between a money/percent symbol and its number. For currencies "
+            "with 100 minor units per major unit, compute major amount plus minor amount "
+            "divided by 100, carry excess minor units into the major amount and use two "
+            "decimal places for an explicitly spoken minor amount. Thus 625 rupees and 2 "
+            "paise is `₹625.02`. Preserve unrelated wording and grammatical endings "
+            "outside the eligible money span."
+        ),
+        (
+            "- Durations: when explicit duration units establish elapsed time, convert "
+            "the entire eligible duration expression, including its unit words and "
+            "internal connectors, to `H:MM` or `H:MM:SS` when seconds are supplied. "
+            "Convert a fractional hour to minutes using 60 minutes per hour; do not leave "
+            "it as a numeric fraction followed by the hour word. Pad minutes and seconds, "
+            "not hours; fill a missing intermediate field with zero, as in `9:00:02`. A "
+            "duration may have more than 23 hours and never receives an inferred AM/PM "
+            "marker. Preserve surrounding wording and do not reinterpret a context-free "
+            "fractional quantity as a duration."
+        ),
+        (
+            "- When an active-language example or rule explicitly covers an ambiguous "
+            "expression, follow its conversion pattern instead of the general defaults "
+            "below. Examples are patterns, not fallback values: determine the value and "
+            "expression type from the actual input. Do not add a currency symbol, decimal "
+            "component, percent sign, ordinal suffix or decade suffix unless the input "
+            "supplies the corresponding meaning."
+        ),
+        (
+            "- For a spoken numerator-denominator expression, parse the complete "
+            "numerator before the fraction separator and the complete denominator after "
+            "it. Do not reinterpret the final word of a multiword numerator as a separate "
+            "mixed-fraction numerator. A separate whole-number part requires an "
+            "explicitly spoken mixed-fraction construction. Preserve the supplied "
+            "numerator and denominator rather than simplifying the fraction or inventing "
+            "a whole-number part."
+        ),
+        (
+            "- Resolve the grammatical meaning of a number-like word in its actual "
+            "sentence before converting it. Keep nonnumeric verbs and temporal or "
+            "adverbial expressions in word form; for example, Hindi `पहले कभी` meaning "
+            "ever before is not a first ordinal. Convert a homograph only where it "
+            "actually denotes an eligible number or ordinal, preserving its native "
+            "ending. Keep number expressions in word form when they are idiomatic, part "
+            "of a proper noun, pronominal or indefinite, or a vague quantity, unless an "
+            "active-language ordinal rule explicitly gives a suffix-preserving written "
+            "form."
+        ),
+        (
+            "- For an explicit measurement quantity, convert the numeral and its unit "
+            "together when the active-language rules establish the unit's written symbol. "
+            "Use the licensed unit spacing and exponent notation, such as `100 m`, `20 "
+            "°C` and `56,030 cm²`. Do not leave the unit spoken after converting the "
+            "numeral when that unit mapping is explicitly supplied. Preserve surrounding "
+            "wording and native grammatical endings; do not invent a written form for an "
+            "inflected or unfamiliar unit. Explicit elapsed-time expressions follow the "
+            "duration rule rather than an unrelated measurement abbreviation."
+        ),
+        (
+            "- In postal or ZIP codes and explicitly digit-spelled house identifiers, "
+            "concatenate exactly one digit for each spoken digit word in order, retaining "
+            "every repetition and zero. Do not drop repeated digits or insert unspoken "
+            "digits. Convert cardinal/grouped house-number readings to their complete "
+            "numeric value. Do not add grouping commas to identifiers or simplify an "
+            "explicitly supplied slash/hyphen address identifier."
+        ),
+        (
+            "- Render recognized acronyms and structured letter-number forms shown by the "
+            "active-language examples in their conventional uppercase written form; do "
+            "not expand them. Match the complete structured expression, not a "
+            "letter-name-looking prefix inside an unrelated word or proper name. Do not "
+            "split or transliterate an ordinary word merely because its beginning sounds "
+            "like a letter name; preserve native endings outside a licensed code span."
+        ),
+        (
+            "- Interpret active-language clock relations before formatting: a licensed "
+            "minutes-past construction adds the minutes to the named hour, while a "
+            "licensed minutes-to construction subtracts them from the upcoming named "
+            "hour. Preserve the applicable 12-hour or explicitly supplied 24-hour "
+            "convention, and do not infer AM/PM. Convert the complete eligible clock "
+            "expression, including its internal clock-unit words, while preserving "
+            "surrounding wording."
+        ),
+    ],
+    ids=(
+        "line-10-minimal-span-copying",
+        "line-11-punctuation-and-spacing-boundaries",
+        "line-21-written-numerals-inside-mixed-transcripts",
+        "line-23-complete-cardinal-value-and-span",
+        "after-line-23-decimal-digit-sequences",
+        "line-24-ordinal-gender-and-endings",
+        "line-25-complete-money-expressions",
+        "line-28-fractional-and-incomplete-field-durations",
+        "line-37-example-type-versus-input-meaning",
+        "after-line-44-complete-numerator-versus-mixed-fraction",
+        "line-42-nonnumeric-homographs-in-context",
+        "after-line-25-complete-licensed-measurement-spans",
+        "line-35-repeated-digits-in-addresses-and-postal-codes",
+        "line-33-structured-code-word-boundaries",
+        "after-line-27-clock-relations-and-complete-clock-spans",
+    ),
+)
+def test_approved_common_prompt_rules(approved_rule: str) -> None:
+    assert PROMPT.count(approved_rule) == 1
