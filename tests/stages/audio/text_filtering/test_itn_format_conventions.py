@@ -143,18 +143,31 @@ def test_dates_keep_native_components_without_year_comma(language: str) -> None:
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
-def test_clocks_and_durations_share_the_common_numeric_style(language: str) -> None:
+def test_clocks_keep_colon_notation(language: str) -> None:
     rows = _rows(language)
     clocks = rows["Time"][1].split(" / ")
     assert clocks[:3] == ["3:05 PM", "10:00 AM", "1:45"]
     assert any(not c.isascii() for c in clocks[3])
-    expected_duration = "1:00 / 1:00:05 / 0:01:05" if language == "hi" else "1:00"
-    assert rows["Duration"][1] == expected_duration
-    assert "9:00:02" in PROMPT
-    assert "more than 23 hours" in PROMPT
     assert "only when seconds are supplied" in PROMPT
     assert "do not infer it" in PROMPT
     assert "do not globally reformat" in PROMPT
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_elapsed_durations_preserve_native_units_and_order(language: str) -> None:
+    spoken, written = _rows(language)["Duration"]
+    if language == "hi":
+        expected = "1 घंटा / 1 घंटा 5 सेकंड / 1 मिनट 5 सेकंड"
+    else:
+        words = spoken.split(" ")
+        words[-1 if language == "mni" else 0] = "1"
+        expected = " ".join(words)
+    assert written == expected
+    assert ":" not in written
+    assert "retain the native duration-unit words" in PROMPT
+    assert "Do not render an elapsed duration as `H:MM` or `H:MM:SS`" in PROMPT
+    assert "Genuine clock readings continue to follow the clock rules above" in PROMPT
+    assert "currency or duration rule" not in PROMPT
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -199,7 +212,7 @@ def test_native_case_and_suffix_examples() -> None:
 def test_corrected_examples_preserve_surrounding_words() -> None:
     assert _rows("ml")["Roman num."][1].startswith("ഹെൻറി VIII രാജാവ് / ")
     assert _rows("ta")["Percent"][1] == "0.5% / 20% முதல் 30%"
-    assert "ఒకటిన్నర గంటలు → `1:30`" in EXAMPLES["te"]
+    assert "ఒకటిన్నర గంటలు → `1.5 గంటలు`" in EXAMPLES["te"]
     assert "ఇద్దరు పిల్లలకి → `ఇద్దరు పిల్లలకి`" in EXAMPLES["te"]
     assert "అతను డాక్టర్ → `అతను డాక్టర్`" in EXAMPLES["te"]
 
@@ -230,7 +243,7 @@ def test_santali_and_sindhi_years_have_explicit_scale_words() -> None:
             "hi",
             "Duration",
             "एक घंटा / एक घंटा पाँच सेकंड / एक मिनट पाँच सेकंड",
-            "1:00 / 1:00:05 / 0:01:05",
+            "1 घंटा / 1 घंटा 5 सेकंड / 1 मिनट 5 सेकंड",
         ),
         (
             "hi",
@@ -314,7 +327,7 @@ def test_approved_language_specific_rules(language: str, approved_rule: str) -> 
             "endings, even when another number in the same sentence is converted. "
             "Converting a neighboring spoken unit or percent word does not by itself "
             "authorize rewriting that numeral. Apply composite arithmetic or "
-            "restructuring only when the applicable explicit currency or duration rule "
+            "restructuring only when the applicable explicit currency rule "
             "requires it for that expression; this exception does not license normalizing "
             "unrelated written numbers or complete written dates and codes. Preserve "
             "unrelated identifiers, punctuation and script mixing; do not globally "
@@ -364,15 +377,14 @@ def test_approved_language_specific_rules(language: str, approved_rule: str) -> 
             "outside the eligible money span."
         ),
         (
-            "- Durations: when explicit duration units establish elapsed time, convert "
-            "the entire eligible duration expression, including its unit words and "
-            "internal connectors, to `H:MM` or `H:MM:SS` when seconds are supplied. "
-            "Convert a fractional hour to minutes using 60 minutes per hour; do not leave "
-            "it as a numeric fraction followed by the hour word. Pad minutes and seconds, "
-            "not hours; fill a missing intermediate field with zero, as in `9:00:02`. A "
-            "duration may have more than 23 hours and never receives an inferred AM/PM "
-            "marker. Preserve surrounding wording and do not reinterpret a context-free "
-            "fractional quantity as a duration."
+            "- Durations: for elapsed time rather than a clock reading, convert only "
+            "the spoken numeric quantities to digits and retain the native duration-unit "
+            "words, their grammatical endings, connectors, order and surrounding "
+            "wording. Keep a fractional amount in its original unit using the "
+            "active-language numeric form; do not convert hours to minutes or combine "
+            "separate unit amounts. Do not render an elapsed duration as `H:MM` or "
+            "`H:MM:SS`, pad quantities, insert missing fields or infer AM/PM. Genuine "
+            "clock readings continue to follow the clock rules above."
         ),
         (
             "- When an active-language example or rule explicitly covers an ambiguous "
@@ -446,7 +458,7 @@ def test_approved_language_specific_rules(language: str, approved_rule: str) -> 
         "after-line-23-decimal-digit-sequences",
         "line-24-ordinal-gender-and-endings",
         "line-25-complete-money-expressions",
-        "line-28-fractional-and-incomplete-field-durations",
+        "line-31-elapsed-duration-preserves-native-units",
         "line-37-example-type-versus-input-meaning",
         "after-line-44-complete-numerator-versus-mixed-fraction",
         "line-42-nonnumeric-homographs-in-context",

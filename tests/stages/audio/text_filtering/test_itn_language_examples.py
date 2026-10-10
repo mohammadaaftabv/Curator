@@ -415,7 +415,11 @@ def test_bundled_examples_preserve_source_example_arity_and_written_forms() -> N
         for category, expected_written in expected_written_by_category.items():
             assert rows[category][1] == expected_written
         assert rows["Time"][1].startswith("3:05 PM / 10:00 AM / 1:45 / ")
-        expected_duration = "1:00 / 1:00:05 / 0:01:05" if language == "hi" else "1:00"
+        duration_words = rows["Duration"][0].split(" ")
+        duration_words[-1 if language == "mni" else 0] = "1"
+        expected_duration = (
+            "1 घंटा / 1 घंटा 5 सेकंड / 1 मिनट 5 सेकंड" if language == "hi" else " ".join(duration_words)
+        )
         assert rows["Duration"][1] == expected_duration
 
         url_spoken, url_written = rows["URL/Email"]
@@ -444,7 +448,7 @@ def test_telugu_itn_rules_cover_reviewed_edge_cases() -> None:
         "తొమ్మిది ముప్పై → `9:30`",
         "ఇద్దరు పిల్లలకి → `ఇద్దరు పిల్లలకి`",
         "ముప్పావు కప్పు → `3/4 కప్పు`",
-        "ఒకటిన్నర గంటలు → `1:30`",
+        "ఒకటిన్నర గంటలు → `1.5 గంటలు`",
     ):
         assert reviewed_rule in telugu_examples
 
