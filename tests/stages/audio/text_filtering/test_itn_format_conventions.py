@@ -113,7 +113,7 @@ def test_cardinal_grouping_preserves_values(language: str) -> None:
     values = [Decimal(value.replace(",", "")) for value in written.split(" / ")]
     assert values == [Decimal(14), Decimal("1030.5"), Decimal(2024)]
     assert "1,00,000" in PROMPT
-    assert "1,23,456.78" in PROMPT
+    assert "the last group has three digits and preceding groups have two" in PROMPT
     assert "Do not group years" in PROMPT
 
 
@@ -334,17 +334,33 @@ def test_approved_language_specific_rules(language: str, approved_rule: str) -> 
             "reformat the transcript or invent unreviewed symbol-plus-suffix forms."
         ),
         (
-            "- Parse each complete cardinal expression as one numeric value before "
-            "formatting it, using the active language's number vocabulary rather than a "
-            "similarly sounding value. Combine its scale multipliers and lower-order "
-            "remainder; consume every word belonging to the numeral, including an initial "
-            "one that multiplies a scale word. Do not concatenate component values, drop "
-            "a remainder or leave a multiplier word behind. Use ASCII digits for newly "
-            "converted numbers. Group ordinary cardinal quantities and the integer part "
-            "of currency amounts with Indian commas: the last group has three digits and "
-            "preceding groups have two, as in `2,024`, `1,00,000`, and `1,23,456.78`. Do "
-            "not group years, ordinal numbers, date/time fields, phone numbers, postal "
-            "codes, house identifiers, fractions or structured letter-number codes."
+            "1. Identify the complete spoken numeral and its role in the actual sentence "
+            "before writing digits. Distinguish an ordinary quantity from a year or an "
+            "identifier. The surrounding sentence may establish a year without literally "
+            "saying “year”; four digits alone do not. Keep separate counts separate, and "
+            "apply the ambiguity rules to nonnumeric or protected expressions."
+        ),
+        (
+            "2. Compute the complete value using the number vocabulary of {language}. "
+            "Combine all scale multipliers and lower-order components belonging to that "
+            "numeral. Include an initial “one” when it multiplies a scale. Consume the "
+            "entire numeral rather than converting one component and leaving a scale or "
+            "multiplier spoken. For a supplied decimal marker, follow the decimal rule below."
+        ),
+        (
+            "3. Format the computed value according to its role. Use ASCII digits for "
+            "newly converted numbers. Apply Indian grouping to ordinary cardinal "
+            "quantities and the integer part of currency amounts: the last group has "
+            "three digits and preceding groups have two. Do not group years, ordinals, "
+            "date/time fields, phone numbers, postal codes, house identifiers, fractions "
+            "or letter-number codes."
+        ),
+        (
+            "4. Replace only the eligible span. Preserve its required native grammatical "
+            "endings and copy everything outside it exactly. Already-written numerals "
+            "are not spoken-number conversion spans: preserve their digit script, "
+            "separators and leading zeroes, subject only to the existing explicit "
+            "composite-currency exception."
         ),
         (
             "- When the input supplies a decimal marker, parse the complete integer part "
@@ -454,7 +470,10 @@ def test_approved_language_specific_rules(language: str, approved_rule: str) -> 
         "line-10-minimal-span-copying",
         "line-11-punctuation-and-spacing-boundaries",
         "line-21-written-numerals-inside-mixed-transcripts",
-        "line-23-complete-cardinal-value-and-span",
+        "cardinal-identify-role",
+        "cardinal-compute-value",
+        "cardinal-format-role",
+        "cardinal-replace-span",
         "after-line-23-decimal-digit-sequences",
         "line-24-ordinal-gender-and-endings",
         "line-25-complete-money-expressions",
