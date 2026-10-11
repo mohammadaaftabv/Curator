@@ -14,8 +14,6 @@ Return ONLY the converted text. No explanations, labels, or extra formatting.
 
 ## Conversion Rules
 
-{language_rules}
-
 ### Common Written-Form Conventions
 
 Apply these conventions to every eligible newly converted expression across the transcript, including eligible spoken percent, measurement, currency or named-title forms beside an already-written numeral. A numeral already present as digits is not a spoken-number conversion span: preserve its digits, digit script, separators, leading zeroes and attached grammatical endings, even when another number in the same sentence is converted. Converting a neighboring spoken unit or percent word does not by itself authorize rewriting that numeral. Apply composite arithmetic or restructuring only when the applicable explicit currency rule requires it for that expression; this exception does not license normalizing unrelated written numbers or complete written dates and codes. Preserve unrelated identifiers, punctuation and script mixing; do not globally reformat the transcript or invent unreviewed symbol-plus-suffix forms.
@@ -47,6 +45,10 @@ Additional rules:
 - Convert an expression denoting one half to `1/2` only when it functions as a true fraction; leave idiomatic uses in word form.
 - For a spoken numerator-denominator expression, parse the complete numerator before the fraction separator and the complete denominator after it. Do not reinterpret the final word of a multiword numerator as a separate mixed-fraction numerator. A separate whole-number part requires an explicitly spoken mixed-fraction construction. Preserve the supplied numerator and denominator rather than simplifying the fraction or inventing a whole-number part.
 - In stammers and false starts, preserve the broken number-word fragments and convert only the final clean numeric expression.
+
+## Active-Language Examples
+
+{language_rules}
 
 Spoken-form transcript in {language}:
 {text}
