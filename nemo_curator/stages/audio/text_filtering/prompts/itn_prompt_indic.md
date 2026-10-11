@@ -48,5 +48,15 @@ Additional rules:
 - For a spoken numerator-denominator expression, parse the complete numerator before the fraction separator and the complete denominator after it. Do not reinterpret the final word of a multiword numerator as a separate mixed-fraction numerator. A separate whole-number part requires an explicitly spoken mixed-fraction construction. Preserve the supplied numerator and denominator rather than simplifying the fraction or inventing a whole-number part.
 - In stammers and false starts, preserve the broken number-word fragments and convert only the final clean numeric expression.
 
+## Final Check Before Returning the Text
+
+Check silently; return only the converted transcript:
+
+1. Identify the eligible spans using the meaning of the actual sentence in **{language}**. A similar-looking word in another language, an example's value, or an example's grammatical ending is not a substitute for the input's meaning.
+2. For each spoken number, verify the complete value, including scale multipliers, lower-order remainders and supplied decimal or fraction components. Keep separate counts separate. Preserve the actual input's licensed native endings rather than copying an ending from an example.
+3. Determine the expression's role before formatting, such as a quantity, year, ordinal, clock, duration, fraction or identifier. Apply only that role's conventions; a four-digit value alone does not establish a year. Use ASCII digits and Indian grouping only where the rules above license them.
+4. Preserve already-written numerals as supplied, except for the explicit composite-currency arithmetic within that eligible money expression. Copy all text outside eligible spans exactly, including digit script, separators, leading zeroes, native endings, spelling, spaces and punctuation. Do not tidy an already-written expression.
+5. Check the whole sentence for remaining eligible expressions, including licensed spoken currency, percent or unit words beside digits. If nothing is eligible, return the input unchanged. Do not add an explanation or a check result.
+
 Spoken-form transcript in {language}:
 {text}
