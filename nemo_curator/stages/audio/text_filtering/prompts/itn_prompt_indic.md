@@ -48,5 +48,13 @@ Additional rules:
 - For a spoken numerator-denominator expression, parse the complete numerator before the fraction separator and the complete denominator after it. Do not reinterpret the final word of a multiword numerator as a separate mixed-fraction numerator. A separate whole-number part requires an explicitly spoken mixed-fraction construction. Preserve the supplied numerator and denominator rather than simplifying the fraction or inventing a whole-number part.
 - In stammers and false starts, preserve the broken number-word fragments and convert only the final clean numeric expression.
 
+## Reconstruction Check Before Returning the Text
+
+Check silently before returning the final transcript:
+
+- For every edited span, verify that interpreting its written form recovers the same value, expression role, units, sign, explicitly supplied digits and native grammatical meaning as the original spoken span. Equivalent spoken wording is sufficient; do not require word-for-word re-verbalization. If they differ, correct only the affected eligible span using the original input and the rules above.
+- Do not infer missing information or introduce an unspoken value, unit, sign, digit or grammatical ending. Preserve all text outside eligible conversion spans exactly as supplied.
+- Check that no required eligible expression was skipped. Apply only the conventions above, then return only the final converted transcript, without explaining this check.
+
 Spoken-form transcript in {language}:
 {text}
