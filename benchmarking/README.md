@@ -796,7 +796,11 @@ pinned model revision, batching, and all eight stages. Only the input
 size, paths, and executor change. The script is standalone; it is not registered
 in `benchmarks.yaml`.
 
-Use the [tutorial environment](../tutorials/audio/qwen_omni_asr/README.md#1-set-up-the-environment).
+Create and activate the dedicated
+[tutorial environment](../tutorials/audio/qwen_omni_asr/README.md#1-set-up-the-environment).
+The tutorial and both benchmark executors use the same `.venv-qwen-omni`
+environment. Keep it activated for data preparation, model download, and both
+runs; a repository-wide `uv sync` selects a different dependency stack.
 From the repository root, stage a five-hour LibriSpeech sample and the model:
 
 ```bash
@@ -846,6 +850,12 @@ output structure, not transcription accuracy.
 One run per executor used 22,710 unique English LibriSpeech clips totaling
 80.61259 audio hours. Each run used one EOS node with 8 × NVIDIA H100 80GB HBM3
 GPUs, batch size 32, two GPUs per ASR worker, and automatic worker scaling.
+
+The measured environment used Python 3.12.3, vLLM 0.15.1, PyTorch and
+torchaudio 2.9.1+cu128, Transformers 4.57.6, Qwen-Omni utilities 0.0.9,
+and Ray 2.54.0. The linked tutorial setup retains that Qwen model stack and
+uses Ray 2.57.0 for current Curator; these historical timings are not a
+measurement of that updated environment.
 
 | Executor | Full process | Pipeline | Pipeline audio-hours/hour | Pipeline audio-hours/GPU-hour |
 | --- | --- | --- | --- | --- |

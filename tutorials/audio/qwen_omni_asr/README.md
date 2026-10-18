@@ -36,16 +36,38 @@ Use Linux x86_64 with CUDA, FFmpeg, and at least two GPUs with enough memory for
 Model startup and the first weight download can take several minutes, even for
 a small input.
 
-From the Curator repository root:
+Use a dedicated Python 3.12 environment for this Qwen pipeline. Its vLLM and
+PyTorch versions match the model stack used for the observed throughput below.
+PyArrow 25 includes the fix for a Python shutdown crash when preparing a small
+streaming dataset. Install [uv](https://docs.astral.sh/uv/getting-started/installation/)
+0.12 or newer, then run from the Curator repository root:
 
 ```bash
-uv sync --extra audio_cuda12 --extra vllm
-source .venv/bin/activate
+uv venv --no-config --python 3.12 .venv-qwen-omni
+source .venv-qwen-omni/bin/activate
+uv pip install --no-config --no-sources --torch-backend cu128 --editable . \
+  'vllm==0.15.1' 'torch==2.9.1+cu128' 'torchaudio==2.9.1+cu128' \
+  'torchvision==0.24.1+cu128' \
+  'transformers==4.57.6' 'qwen-omni-utils==0.0.9' 'ray==2.57.0' \
+  'numpy==2.2.0' 'soundfile==0.13.1' 'librosa==0.11.0' \
+  'pyarrow==25.0.0' 'datasets==5.0.1' 'huggingface-hub==0.36.2' \
+  gpustat pytest GitPython rich
+uv pip install --no-config --no-sources 'torchcodec==0.9.0'
+uv pip check --no-config
 command -v ffmpeg
-python -c 'import torch; assert torch.cuda.device_count() >= 2, "At least two CUDA GPUs are required"'
+python -c 'import sys, torch; print(sys.executable, torch.__version__); assert torch.cuda.device_count() >= 2, "At least two CUDA GPUs are required"'
 ```
 
-Run the remaining commands from that same directory and activated environment.
+The environment lives in `.venv-qwen-omni`. Activating it makes `python` and
+`hf` use its packages; the editable install loads Curator from this checkout.
+TorchCodec is installed separately from PyPI for CPU audio decoding; Qwen
+inference uses the CUDA-enabled PyTorch installation.
+The `--no-config --no-sources` options keep the repository's shared CUDA package
+overrides and indexes out of this dedicated installation. Use these commands
+instead of the repository-wide `uv sync` for this tutorial, and run the remaining
+commands from the repository root with this environment activated. In a new
+shell, run `source .venv-qwen-omni/bin/activate` again.
+
 For an existing Ray cluster, set `RAY_ADDRESS`; audio and workspace paths must
 be accessible to every worker. FFmpeg must also be installed on each worker.
 
@@ -239,6 +261,12 @@ One measured run per executor used the same 22,710 unique English LibriSpeech
 clips, totaling 80.61259 audio hours. Each run used one EOS node with
 8 × NVIDIA H100 80GB HBM3 GPUs, batch size 32, two GPUs per ASR worker, and
 automatic worker scaling.
+
+These measurements used a prebuilt environment with Python 3.12.3,
+vLLM 0.15.1, PyTorch and torchaudio 2.9.1+cu128, Transformers 4.57.6,
+Qwen-Omni utilities 0.0.9, and Ray 2.54.0. They did not use the current
+repository-wide `uv sync` environment. The setup above retains that Qwen model
+stack and uses Ray 2.57.0 to satisfy the current Curator requirements.
 
 | Measurement | Xenna streaming | Ray Data |
 | --- | --- | --- |
